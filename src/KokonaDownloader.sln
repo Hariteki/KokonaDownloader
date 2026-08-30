@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KokonaDownloader.Core", "KokonaDownloader.Core\KokonaDownloader.Core.csproj", "{C3CBCA54-B625-48B1-A996-DF83E97420D0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KokonaDownloader.Core.Tests", "KokonaDownloader.Core.Tests\KokonaDownloader.Core.Tests.csproj", "{887A73EB-CA36-4C29-A9A0-CF68B577FBCC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KokonaDownloader.App", "KokonaDownloader.App\KokonaDownloader.App.csproj", "{CFDB07E4-6CB3-4EF5-AC97-1E8357E2371F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C3CBCA54-B625-48B1-A996-DF83E97420D0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C3CBCA54-B625-48B1-A996-DF83E97420D0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C3CBCA54-B625-48B1-A996-DF83E97420D0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C3CBCA54-B625-48B1-A996-DF83E97420D0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{887A73EB-CA36-4C29-A9A0-CF68B577FBCC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{887A73EB-CA36-4C29-A9A0-CF68B577FBCC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{887A73EB-CA36-4C29-A9A0-CF68B577FBCC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{887A73EB-CA36-4C29-A9A0-CF68B577FBCC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CFDB07E4-6CB3-4EF5-AC97-1E8357E2371F}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{CFDB07E4-6CB3-4EF5-AC97-1E8357E2371F}.Debug|Any CPU.Build.0 = Debug|x64
+		{CFDB07E4-6CB3-4EF5-AC97-1E8357E2371F}.Release|Any CPU.ActiveCfg = Release|x64
+		{CFDB07E4-6CB3-4EF5-AC97-1E8357E2371F}.Release|Any CPU.Build.0 = Release|x64
+	EndGlobalSection
+EndGlobal

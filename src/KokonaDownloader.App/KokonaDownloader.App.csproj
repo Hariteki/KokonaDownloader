@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>KokonaDownloader.App</RootNamespace>
+    <AssemblyName>KokonaDownloader</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 应用图标：exe 内嵌图标（资源管理器/任务栏/快捷方式默认图标），源为 icons 包 app\app.ico -->
+    <ApplicationIcon>..\..\icons\app\app.ico</ApplicationIcon>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- CsWinRT 源生成器（WASDK 1.8）生成的实例化代码含 unsafe，需显式允许 -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Version>1.0.0</Version>
+    <WindowsSdkPackageVersion>10.0.19041.38</WindowsSdkPackageVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260804001" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.6901" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\KokonaDownloader.Core\KokonaDownloader.Core.csproj" />
+  </ItemGroup>
+
+  <!-- WinForms 仅用于托盘 NotifyIcon；用 FrameworkReference 引入，
+       避免 UseWindowsForms 触发 WindowsDesktop SDK 的 WPF XAML 管线与 WinUI 冲突 -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\vendor\aria2\aria2c.exe" CopyToOutputDirectory="PreserveNewest" Link="aria2c.exe" />
+    <!-- 托盘底图与窗口/任务栏图标（titlebar-tray 造型）：随发布输出，单文件打包时嵌入 exe -->
+    <None Include="..\..\icons\titlebar-tray\tray.ico" CopyToOutputDirectory="PreserveNewest" Link="icons\tray.ico" />
+    <None Include="..\..\icons\titlebar-tray\icon-32.png" CopyToOutputDirectory="PreserveNewest" Link="icons\tray.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- WindowsPackageType=None 时 publish 默认不带 XBF/PRI，显式补齐，保证发布目录可直接运行 -->
+  <Target Name="CopyXamlResourcesToPublishDir" AfterTargets="Publish">
+    <ItemGroup>
+      <_XamlRes Include="$(TargetDir)*.xbf" />
+      <_XamlRes Include="$(TargetDir)$(AssemblyName).pri" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_XamlRes)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

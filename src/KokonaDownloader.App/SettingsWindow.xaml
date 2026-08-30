@@ -1,0 +1,136 @@
+<Window
+    x:Class="KokonaDownloader.App.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:themes="using:KokonaDownloader.App.Themes"
+    Title="设置">
+
+    <Grid x:Name="Root" RequestedTheme="Dark"
+          Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 顶部拖拽区：标题栏融入内容，无色带，随主题背景 -->
+        <Border x:Name="TitleDrag" Grid.Row="0" Height="40" Background="Transparent">
+            <TextBlock Text="设置" Margin="24,0,0,0" VerticalAlignment="Center"
+                       FontSize="14" FontWeight="SemiBold"
+                       Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+        </Border>
+
+        <ScrollViewer Grid.Row="1" Margin="24,0,24,0">
+            <StackPanel Spacing="16">
+
+                <StackPanel Spacing="8">
+                    <TextBlock Text="主题配色" FontWeight="SemiBold" FontSize="13"/>
+                    <themes:ThemeSwatchPicker x:Name="ThemePicker"/>
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="默认下载目录" FontWeight="SemiBold" FontSize="13"/>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="DirBox" Grid.Column="0"/>
+                        <Button Grid.Column="1" Click="OnBrowseDir" Content="浏览…"/>
+                    </Grid>
+                </StackPanel>
+
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Spacing="4">
+                        <TextBlock Text="最大同时下载任务数" FontWeight="SemiBold" FontSize="13"/>
+                        <NumberBox x:Name="MaxConcBox" Minimum="1" Maximum="32" SpinButtonPlacementMode="Inline"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="4">
+                        <TextBlock Text="单任务默认线程数" FontWeight="SemiBold" FontSize="13"/>
+                        <NumberBox x:Name="ConnBox" Minimum="1" Maximum="32" SpinButtonPlacementMode="Inline"/>
+                    </StackPanel>
+                </Grid>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="全局限速" FontWeight="SemiBold" FontSize="13"/>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="GlobalLimitBox" Grid.Column="0" MaxLength="6"
+                                 PlaceholderText="留空则不限速"
+                                 BeforeTextChanging="OnLimitBeforeTextChanging"/>
+                        <TextBlock Grid.Column="1" Text="MB/s" VerticalAlignment="Center" FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </Grid>
+                </StackPanel>
+
+                <StackPanel Spacing="8">
+                    <ToggleSwitch x:Name="NotifySwitch" Header="下载完成通知" OnContent="开" OffContent="关"/>
+                    <ToggleSwitch x:Name="InterceptSwitch" Header="浏览器扩展自动拦截下载" OnContent="开" OffContent="关"/>
+                    <ToggleSwitch x:Name="MinimizeSwitch" Header="关闭时最小化到托盘" OnContent="开" OffContent="关"/>
+                    <ToggleSwitch x:Name="StartupSwitch" Header="开机自动启动" OnContent="开" OffContent="关"/>
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="浏览器扩展连接" FontWeight="SemiBold" FontSize="13"/>
+                    <TextBlock Text="用于让浏览器扩展接管网页下载，扩展需要凭下方地址和密钥连接本软件。"
+                               FontSize="12" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                            CornerRadius="8" Padding="12">
+                        <StackPanel Spacing="10">
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="地址" FontSize="12" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                <TextBlock Grid.Column="1" x:Name="ApiAddressText" FontSize="12" FontFamily="Consolas"
+                                           VerticalAlignment="Center" TextWrapping="Wrap"
+                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                            </Grid>
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="密钥" FontSize="12" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                <TextBlock Grid.Column="1" x:Name="SecretText" FontSize="12" FontFamily="Consolas"
+                                           VerticalAlignment="Center" TextWrapping="Wrap"
+                                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+                                <Button Grid.Column="2" x:Name="CopySecretBtn" Content="复制密钥" MinWidth="88" Padding="12,4"
+                                        FontSize="12" VerticalAlignment="Center" Click="OnCopySecret"/>
+                            </Grid>
+                            <TextBlock Text="提示：把密钥复制并粘贴到浏览器扩展的设置页中保存，扩展才能自动连接并接管浏览器下载。"
+                                       FontSize="11" TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <TextBlock x:Name="ErrorText" Foreground="{ThemeResource SystemFillColorCriticalBrush}" FontSize="12"
+                           TextWrapping="Wrap" Visibility="Collapsed"/>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Grid Grid.Row="2" Margin="24,16,24,16" HorizontalAlignment="Right" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Button Content="取消" Click="OnCancelClick" MinWidth="104"/>
+            <Button Grid.Column="1" Content="保存" Style="{ThemeResource AccentButtonStyle}"
+                    Click="OnSaveClick" MinWidth="104"/>
+        </Grid>
+    </Grid>
+</Window>

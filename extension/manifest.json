@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "海兔下载器",
+  "version": "1.0.0",
+  "description": "接管浏览器下载：自动捕获下载请求并交给海兔下载器桌面客户端（Aria2 引擎）多线程高速下载。",
+  "permissions": [
+    "downloads",
+    "contextMenus",
+    "storage",
+    "notifications",
+    "alarms",
+    "clipboardRead"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "海兔下载器",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

@@ -1,0 +1,22 @@
+# 用户构建/发布产物
+dist/
+release/
+realese/
+
+# 编译产物
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# 日志与临时文件
+*.log
+_tmp_*
+*.tmp
+
+# 扩展打包产物（私钥绝对不能提交）
+extension.crx
+extension.pem
