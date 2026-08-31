@@ -2,7 +2,7 @@
 
 一款基于 Aria2 引擎的 Windows 下载工具。点击浏览器里的下载链接，文件就会自动交给桌面客户端进行多线程高速下载。
 
-![主界面](screenshot/Screenshot_20260830184407.png)
+![主界面](screenshot/Screenshot02.png)
 
 **它能做什么：**
 

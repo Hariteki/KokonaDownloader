@@ -185,6 +185,9 @@ public static class ThemeService
         _overrides["AccentTextFillColorSecondaryBrush"] = Solid(t.AccentLight1);
         _overrides["AccentTextFillColorTertiaryBrush"] = Solid(t.AccentLight1);
         _overrides["AccentTextFillColorDisabledBrush"] = Solid(t.TitleText with { A = 0x5D });
+        // Tab 栏动画用的 Color 类型键（Brush 无法直接用于 ColorAnimation）
+        _overrides["TabAccentColor"] = ToColor(t.AccentLight2);
+        _overrides["TabInactiveColor"] = ToColor(t.TitleText with { A = 0x9E });
         _overrides["AccentAAFillColorDefaultBrush"] = Solid(t.Accent);
         _overrides["AccentAAFillColorDisabledBrush"] = Solid(accentDisabled);
         _overrides["AccentControlElevationBorderBrush"] = Solid(accentHover);

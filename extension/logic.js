@@ -81,11 +81,35 @@ var KokonaLogic = (function () {
     }
 
     /** 是否应自动捕获该下载项。 */
-    function shouldCapture(item, s) {
+    function shouldCapture(item, s, extStartMs) {
         if (!item || !s) return false;
         if (!s.autoCapture) return false;
         if (!isSupportedUrl(item.url)) return false;
         if (isOwnApiUrl(item.url, s)) return false;
+        if (!isFreshDownload(item, extStartMs)) return false;
+        return true;
+    }
+
+    /**
+     * 仅捕获"本次浏览器会话内新发起"的下载，拦截三类历史回放：
+     *  - Edge 会话恢复/下载历史同步会把旧下载项重新触发 onCreated
+     *  - 旧 aria2 类下载器/扩展遗留的已完成条目在启动时被回放
+     * 判定（满足任一即视为历史项，不捕获）：
+     *  1. 已开始（state 非 in_progress）：已完成/已中断/未知态
+     *  2. 已有实际保存路径（filename 非空）：说明文件已在磁盘上（回放特征）
+     *  3. 开始时间早于扩展启动时刻：启动防火墙
+     *  4. 开始时间距今超过 30 秒：非本次新发起
+     * @param {object} item chrome.downloads.DownloadItem
+     * @param {number} extStartMs 扩展启动时刻（Date.now()），可选；不传则跳过启动防火墙
+     */
+    function isFreshDownload(item, extStartMs) {
+        if (!item) return false;
+        if (item.state && item.state !== 'in_progress') return false;
+        if (item.filename) return false;
+        var t = Date.parse(item.startTime || '');
+        if (isNaN(t)) return true;
+        if (extStartMs && t < extStartMs) return false;
+        if (Date.now() - t > 30000) return false;
         return true;
     }
 
@@ -120,6 +144,7 @@ var KokonaLogic = (function () {
         fileNameFromUrl: fileNameFromUrl,
         baseName: baseName,
         shouldCapture: shouldCapture,
+        isFreshDownload: isFreshDownload,
         buildDownloadPayload: buildDownloadPayload,
         urlKey: urlKey
     };

@@ -10,6 +10,8 @@ importScripts('logic.js');
 
 const SETTINGS_KEY = 'kokona_settings';
 const PING_ALARM = 'kokona-ping';
+/** 扩展启动时刻：作为"仅捕获新发起下载"的启动防火墙，早于此刻的下载项一律视为历史回放。 */
+const extStartMs = Date.now();
 
 /** 内存缓存（service worker 可能随时被回收，持久数据一律走 storage）。 */
 let cachedSettings = null;
@@ -217,7 +219,7 @@ async function handleDownloadCreated(item) {
   forwardingNow.add(key);
   try {
     const s = await loadSettings();
-    if (!KokonaLogic.shouldCapture(item, s)) return;
+    if (!KokonaLogic.shouldCapture(item, s, extStartMs)) return;
 
     const payload = KokonaLogic.buildDownloadPayload(item, s);
     try {

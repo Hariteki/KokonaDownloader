@@ -11,6 +11,54 @@
     <Grid x:Name="RootGrid" Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
         <Grid.Resources>
             <converters:BoolToVisibilityConverter x:Key="BoolToVis"/>
+            <!-- Metro 风格 Tab：纯文字大标题，无圆点无下划线，选中时主题色+加粗 -->
+            <Style x:Key="FilterTabStyle" TargetType="RadioButton">
+                <Setter Property="MinWidth" Value="0"/>
+                <Setter Property="MinHeight" Value="0"/>
+                <Setter Property="Padding" Value="12,6"/>
+                <Setter Property="FontSize" Value="24"/>
+                <Setter Property="FontWeight" Value="Bold"/>
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <Grid x:Name="TabRoot" Background="Transparent">
+                                <ContentPresenter x:Name="TabContent" Content="{TemplateBinding Content}"
+                                                  Padding="{TemplateBinding Padding}"
+                                                  HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <ContentPresenter.Foreground>
+                                        <SolidColorBrush x:Name="TabBrush" Color="{ThemeResource TabInactiveColor}"/>
+                                    </ContentPresenter.Foreground>
+                                </ContentPresenter>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CheckStates">
+                                        <VisualState x:Name="Checked">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="TabBrush" Storyboard.TargetProperty="Color"
+                                                                To="{ThemeResource TabAccentColor}" Duration="0:0:0.18">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Unchecked">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="TabBrush" Storyboard.TargetProperty="Color"
+                                                                To="{ThemeResource TabInactiveColor}" Duration="0:0:0.15">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
             <Style x:Key="DangerButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="{ThemeResource SystemFillColorCriticalBrush}"/>
                 <Setter Property="Foreground" Value="White"/>
@@ -124,48 +172,53 @@
             </StackPanel>
         </Grid>
 
-        <!-- 筛选与搜索 -->
-        <Grid Grid.Row="2" Padding="16,8" ColumnSpacing="12">
+        <!-- 筛选与搜索：Tab 栏 + 右侧选择按钮 + 搜索框 -->
+        <Grid Grid.Row="2" Padding="16,4" ColumnSpacing="8">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4">
-                <RadioButton x:Name="FilterAll" Content="全部" GroupName="Filter" IsChecked="True" Click="OnFilterChanged"/>
-                <RadioButton x:Name="FilterActive" Content="下载中" GroupName="Filter" Click="OnFilterChanged"/>
-                <RadioButton x:Name="FilterPaused" Content="已暂停" GroupName="Filter" Click="OnFilterChanged"/>
-                <RadioButton x:Name="FilterDone" Content="已完成" GroupName="Filter" Click="OnFilterChanged"/>
-                <RadioButton x:Name="FilterFailed" Content="失败" GroupName="Filter" Click="OnFilterChanged"/>
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="2" VerticalAlignment="Bottom">
+                <RadioButton x:Name="FilterAll" Content="全部" GroupName="Filter" IsChecked="True" Click="OnFilterChanged" Style="{StaticResource FilterTabStyle}"/>
+                <RadioButton x:Name="FilterActive" Content="下载中" GroupName="Filter" Click="OnFilterChanged" Style="{StaticResource FilterTabStyle}"/>
+                <RadioButton x:Name="FilterPaused" Content="已暂停" GroupName="Filter" Click="OnFilterChanged" Style="{StaticResource FilterTabStyle}"/>
+                <RadioButton x:Name="FilterDone" Content="已完成" GroupName="Filter" Click="OnFilterChanged" Style="{StaticResource FilterTabStyle}"/>
+                <RadioButton x:Name="FilterFailed" Content="失败" GroupName="Filter" Click="OnFilterChanged" Style="{StaticResource FilterTabStyle}"/>
+                <Border Width="1" Height="16" Margin="8,0" VerticalAlignment="Center"
+                        Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                <Button x:Name="BtnBatch" ToolTipService.ToolTip="筛选任务" AutomationProperties.Name="筛选任务"
+                        Background="Transparent" BorderThickness="0" Padding="8,2" MinHeight="28">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <FontIcon Glyph="&#xE71C;" FontSize="13"/>
+                        <TextBlock Text="筛选" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                    <Button.Flyout>
+                        <MenuFlyout Placement="Bottom">
+                            <MenuFlyoutItem Text="全选" Click="OnSelectAllClick"/>
+                            <MenuFlyoutItem Text="反选" Click="OnInvertSelectionClick"/>
+                            <MenuFlyoutItem Text="取消选择" Click="OnClearSelectionClick"/>
+                            <MenuFlyoutSeparator/>
+                            <MenuFlyoutItem Text="暂停选中" Click="OnBatchPauseClick">
+                                <MenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE769;"/>
+                                </MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem Text="继续选中" Click="OnBatchResumeClick">
+                                <MenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE768;"/>
+                                </MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                            <MenuFlyoutItem Text="删除选中" Click="OnBatchDeleteClick" Foreground="{ThemeResource SystemFillColorCriticalBrush}">
+                                <MenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE74D;" Foreground="{ThemeResource SystemFillColorCriticalBrush}"/>
+                                </MenuFlyoutItem.Icon>
+                            </MenuFlyoutItem>
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
             </StackPanel>
-            <Button x:Name="BtnBatch" Grid.Column="1" ToolTipService.ToolTip="选择任务" AutomationProperties.Name="选择任务">
-                <FontIcon Glyph="&#xE73A;" FontSize="16"/>
-                <Button.Flyout>
-                    <MenuFlyout Placement="Bottom">
-                        <MenuFlyoutItem Text="全选" Click="OnSelectAllClick"/>
-                        <MenuFlyoutItem Text="反选" Click="OnInvertSelectionClick"/>
-                        <MenuFlyoutItem Text="取消选择" Click="OnClearSelectionClick"/>
-                        <MenuFlyoutSeparator/>
-                        <MenuFlyoutItem Text="暂停选中" Click="OnBatchPauseClick">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE769;"/>
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                        <MenuFlyoutItem Text="继续选中" Click="OnBatchResumeClick">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE768;"/>
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                        <MenuFlyoutItem Text="删除选中" Click="OnBatchDeleteClick" Foreground="{ThemeResource SystemFillColorCriticalBrush}">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE74D;" Foreground="{ThemeResource SystemFillColorCriticalBrush}"/>
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                    </MenuFlyout>
-                </Button.Flyout>
-            </Button>
-            <AutoSuggestBox x:Name="SearchBox" Grid.Column="2" PlaceholderText="搜索"
-                            QueryIcon="Find" MaxWidth="320" HorizontalAlignment="Right"
+            <AutoSuggestBox x:Name="SearchBox" Grid.Column="1" PlaceholderText="搜索"
+                            QueryIcon="Find" Width="200" MinWidth="120" VerticalAlignment="Center"
                             TextChanged="OnSearchTextChanged"/>
         </Grid>
 
@@ -305,11 +358,11 @@
             </ListView.ItemTemplate>
         </ListView>
 
-        <!-- 空状态 -->
-        <StackPanel x:Name="EmptyState" Grid.Row="3" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" Visibility="Collapsed">
-            <FontIcon Glyph="&#xE896;" FontSize="48" Foreground="{ThemeResource TextFillColorDisabledBrush}"/>
-            <TextBlock Text="暂无下载任务" FontSize="16" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            <TextBlock Text="点击左上角“新建下载”开始" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+        <!-- 空状态：跨列表+底部状态栏两行，在可视区域中央居中 -->
+        <StackPanel x:Name="EmptyState" Grid.Row="3" Grid.RowSpan="2" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" Visibility="Collapsed">
+            <FontIcon Glyph="&#xE896;" FontSize="48" Foreground="{ThemeResource TextFillColorDisabledBrush}" HorizontalAlignment="Center"/>
+            <TextBlock Text="暂无下载任务" FontSize="16" Foreground="{ThemeResource TextFillColorSecondaryBrush}" HorizontalAlignment="Center"/>
+            <TextBlock Text="点击左上角“新建下载”开始" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" HorizontalAlignment="Center"/>
         </StackPanel>
 
         <!-- 底部状态栏 -->
