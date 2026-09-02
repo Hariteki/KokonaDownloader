@@ -34,14 +34,25 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // 两个列表共用同一 ObservableCollection：BT 专用页仅在 BT 筛选下可见，
+        // 此时 MatchesFilter 已保证集合中只有 BT 任务，无需维护第二份数据源
         TaskList.ItemsSource = _tasks;
+        BtList.ItemsSource = _tasks;
 
         // 沉浸式标题栏：无系统色带，标题文字融入内容区（与设置窗口同款样式）
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(TitleDrag);
 
         // 最小窗口尺寸：保证工具栏/列表/状态栏完整显示，不被裁剪重叠
-        WindowEffects.SetMinSize(this, 860, 560);
+        // 940 = Tab 栏五项 + 筛选按钮(≈540) 与右上角 BT下载 + 搜索框(≈310) 同行容纳的最低宽度
+        WindowEffects.SetMinSize(this, 940, 560);
+        // 初始即以最小尺寸启动：等价于用户手动缩到最小后的状态
+        try
+        {
+            var s = GetDpiScale();
+            AppWindow.Resize(new Windows.Graphics.SizeInt32((int)(940 * s), (int)(560 * s)));
+        }
+        catch (Exception ex) { App.Log($"设置初始窗口尺寸失败: {ex.Message}"); }
         // 原生 Mica 磨砂背景（声明式 SystemBackdrop，生命周期与激活状态由框架托管，最可靠）
         try { SystemBackdrop = new MicaBackdrop { Kind = MicaKind.BaseAlt }; }
         catch (Exception ex) { App.Log($"应用 Mica 失败: {ex.Message}"); }
@@ -61,6 +72,8 @@ public partial class MainWindow : Window
         if (App.Host != null)
         {
             App.Host.Engine.EngineEvent += OnEngineEvent;
+            // 浏览器扩展经 /api/download 送来的单条磁力链接：弹独立确认窗口（不弹主窗口）
+            App.Host.Api.MagnetConfirmRequested += OnApiMagnetConfirm;
         }
 
         // 单实例：监听"显示窗口"命名事件（第二个实例启动时触发）
@@ -83,6 +96,7 @@ public partial class MainWindow : Window
             if (App.Host != null)
             {
                 App.Host.Engine.EngineEvent -= OnEngineEvent;
+                App.Host.Api.MagnetConfirmRequested -= OnApiMagnetConfirm;
                 await App.Host.DisposeAsync();
             }
             App.Tray?.Dispose();
@@ -130,11 +144,17 @@ public partial class MainWindow : Window
             case "TaskChanged" when e.Task != null:
                 var t = e.Task;
                 var isNewTask = e.IsNewTask;
+                App.Log($"[task] TaskChanged gid={t.Gid} state={t.State} name={t.Name} 新建={isNewTask}");
                 DispatcherQueue.TryEnqueue(() =>
                 {
                     HandleTaskFinished(t);
                     HandleProgressWindow(t, isNewTask);
                 });
+                break;
+            case "TaskRemoved" when e.Task != null:
+                var removed = e.Task;
+                App.Log($"[task] TaskRemoved gid={removed.Gid}");
+                DispatcherQueue.TryEnqueue(() => HandleProgressWindow(removed, false));
                 break;
         }
     }
@@ -142,6 +162,7 @@ public partial class MainWindow : Window
     /// <summary>IDM 式进度小窗：仅在新建任务时弹出（暂停后继续/重启恢复不弹），结束/移除时关闭并清理。</summary>
     private void HandleProgressWindow(DownloadTaskInfo t, bool isNewTask)
     {
+        App.Log($"[ui] HandleProgressWindow gid={t.Gid} state={t.State} 新建={isNewTask}");
         if (t.State is TaskState.Active or TaskState.Waiting)
         {
             // 只有引擎标记的"本会话新建任务"才弹窗；暂停后继续（状态重回 Active）不弹
@@ -150,13 +171,14 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    var win = new ProgressWindow(t.Gid, t.Name);
+                    var win = new ProgressWindow(t.Gid, t.Name, t.IsBt);
                     win.Closed += (_, _) => _progressWindows.Remove(t.Gid);
                     _progressWindows[t.Gid] = win;
                     SizeAndPlaceProgressWindow(win);
                     win.Activate();
                     // 下载可能由扩展在后台触发，必须强制把小窗拉到前台，否则用户看不到
                     WindowEffects.ForceForeground(win);
+                    App.Log($"[ui] 进度小窗已创建 gid={t.Gid} title={t.Name}");
                 }
                 catch (Exception ex) { App.Log($"打开进度小窗失败: {ex.Message}"); }
             }
@@ -181,7 +203,8 @@ public partial class MainWindow : Window
             // 宽度留足信息条三列（速度/大小/剩余时间）不挤压；高度贴合内容自然高度，避免按钮下方大片空白
             var scale = GetDpiScale();
             var w = (int)(400 * scale);
-            var h = (int)(192 * scale);
+            // BT 任务小窗更高：容纳 Motrix 式方块矩阵（最多 400 块 ≈ 24 列 × 17 行 ≈ 252px + 统计行）
+            var h = (int)((win.IsBt ? 460 : 192) * scale);
             win.AppWindow.Resize(new Windows.Graphics.SizeInt32(w, h));
 
             // 居中：取主窗口所在显示器的工作区（物理像素），小窗置于其正中
@@ -362,6 +385,7 @@ public partial class MainWindow : Window
 
     private void ApplyView()
     {
+        UpdateBtSummary();
         var filtered = _taskMap.Values.Where(MatchesFilter).ToList();
         // 排序：恒定按添加时间倒序（新任务在顶部），不随状态变化，避免暂停/继续等操作导致列表跳动
         filtered = filtered
@@ -395,10 +419,20 @@ public partial class MainWindow : Window
         EmptyState.Visibility = _tasks.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    /// <summary>BT 专用页概要条：任务总数 / 下载中 / 做种中（数据源自全量任务表，与筛选无关）。</summary>
+    private void UpdateBtSummary()
+    {
+        var bts = _taskMap.Values.Where(t => t.IsBt).ToList();
+        BtSummaryText.Text = bts.Count == 0
+            ? "暂无 BT 任务"
+            : $"BT 任务 {bts.Count} · 下载中 {bts.Count(t => t.State == TaskState.Active)} · 做种 {bts.Count(t => t.State == TaskState.Seeding)}";
+    }
+
     private bool MatchesFilter(TaskItemViewModel t)
     {
         var okFilter = _filter switch
         {
+            "bt" => t.IsBt,
             "active" => t.State == TaskState.Active || t.State == TaskState.Waiting,
             "paused" => t.State == TaskState.Paused,
             "done" => t.State == TaskState.Completed,
@@ -414,10 +448,26 @@ public partial class MainWindow : Window
 
     private void OnFilterChanged(object sender, RoutedEventArgs e)
     {
-        _filter = (FilterActive.IsChecked == true) ? "active"
+        // BT 入口在右上角，与 Tab 栏不同容器：WinUI 3 的 GroupName 互斥不跨容器生效，这里显式同步选中态
+        if (ReferenceEquals(sender, FilterBt))
+        {
+            var checkedTab = new[] { FilterAll, FilterActive, FilterPaused, FilterDone, FilterFailed }
+                .FirstOrDefault(t => t.IsChecked == true);
+            if (checkedTab != null) checkedTab.IsChecked = false;
+        }
+        else
+        {
+            FilterBt.IsChecked = false;
+        }
+        _filter = (FilterBt.IsChecked == true) ? "bt"
+            : (FilterActive.IsChecked == true) ? "active"
             : (FilterPaused.IsChecked == true) ? "paused"
             : (FilterDone.IsChecked == true) ? "done"
             : (FilterFailed.IsChecked == true) ? "failed" : "all";
+        // 视图切换：BT 筛选显示专用页（完整方块矩阵），其余显示常规列表；批量操作作用于当前可见列表
+        var btView = _filter == "bt";
+        TaskList.Visibility = btView ? Visibility.Collapsed : Visibility.Visible;
+        BtPage.Visibility = btView ? Visibility.Visible : Visibility.Collapsed;
         ApplyView();
     }
 
@@ -427,7 +477,11 @@ public partial class MainWindow : Window
         ApplyView();
     }
 
-    private async void OnNewClick(object sender, RoutedEventArgs e) => await ShowNewDownloadDialog();
+    private async void OnNewClick(object sender, RoutedEventArgs e)
+    {
+        App.Log("[ui] 新建下载按钮点击");
+        await ShowNewDownloadDialog();
+    }
 
     private async void OnPauseAllClick(object sender, RoutedEventArgs e)
     {
@@ -497,28 +551,34 @@ public partial class MainWindow : Window
 
     private void OnTaskRightTapped(object sender, RightTappedRoutedEventArgs e)
     {
+        // 主列表与 BT 专用页共用右键菜单；单选作用于触发事件的列表
         if (e.OriginalSource is FrameworkElement { DataContext: TaskItemViewModel vm })
         {
-            if (!TaskList.SelectedItems.Contains(vm))
-                TaskList.SelectedItem = vm;
-            ShowContextMenu(vm);
+            if (sender is ListView list && !list.SelectedItems.Contains(vm))
+                list.SelectedItem = vm;
+            ShowContextMenu(vm, (FrameworkElement)sender);
         }
     }
 
     #region 多选与批量操作
 
-    private void OnSelectAllClick(object sender, RoutedEventArgs e) => TaskList.SelectAll();
+    // 批量操作作用于当前可见列表：BT 页操作 BtList，其余页操作 TaskList。
+    // 两列表共用同一 ObservableCollection，且 MatchesFilter 保证 BT 页下集合内只有 BT 任务，操作安全
+    private ListView ActiveList => _filter == "bt" ? BtList : TaskList;
+
+    private void OnSelectAllClick(object sender, RoutedEventArgs e) => ActiveList.SelectAll();
 
     private void OnInvertSelectionClick(object sender, RoutedEventArgs e)
     {
-        var selected = TaskList.SelectedItems.ToHashSet();
-        var inverted = TaskList.Items.Where(i => !selected.Contains(i)).ToList();
-        TaskList.SelectedItems.Clear();
+        var list = ActiveList;
+        var selected = list.SelectedItems.ToHashSet();
+        var inverted = list.Items.Where(i => !selected.Contains(i)).ToList();
+        list.SelectedItems.Clear();
         foreach (var i in inverted)
-            TaskList.SelectedItems.Add(i);
+            list.SelectedItems.Add(i);
     }
 
-    private void OnClearSelectionClick(object sender, RoutedEventArgs e) => TaskList.SelectedItems.Clear();
+    private void OnClearSelectionClick(object sender, RoutedEventArgs e) => ActiveList.SelectedItems.Clear();
 
     private async void OnBatchPauseClick(object sender, RoutedEventArgs e)
     {
@@ -562,17 +622,17 @@ public partial class MainWindow : Window
         var deleteFile = result == ContentDialogResult.Primary;
         foreach (var vm in list)
             await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile);
-        TaskList.SelectedItems.Clear();
+        ActiveList.SelectedItems.Clear();
     }
 
     private IEnumerable<TaskItemViewModel> SelectedTasks() =>
-        TaskList.SelectedItems.OfType<TaskItemViewModel>();
+        ActiveList.SelectedItems.OfType<TaskItemViewModel>();
 
     #endregion
 
     #endregion
 
-    private void ShowContextMenu(TaskItemViewModel vm)
+    private void ShowContextMenu(TaskItemViewModel vm, FrameworkElement anchor)
     {
         var menu = new MenuFlyout();
         menu.Items.Add(new MenuFlyoutItem { Text = "打开文件", Icon = new FontIcon { Glyph = "\uE8E5" } }
@@ -605,11 +665,17 @@ public partial class MainWindow : Window
                     }
                 }));
         menu.Items.Add(new MenuFlyoutItem { Text = "重新下载", Icon = new FontIcon { Glyph = "\uE895" } }
-            .Tap(async () => { if (App.Host?.Engine != null) await App.Host.Engine.RedownloadAsync(vm.Gid); }));
+            .Tap(async () =>
+            {
+                if (App.Host?.Engine == null) return;
+                try { await App.Host.Engine.RedownloadAsync(vm.Gid); }
+                catch (DuplicateTaskException dex) { App.Log($"[ui] 重新下载被拦截: {dex.Message}"); }
+                catch (Exception ex) { App.Log($"[ui] 重新下载失败: {ex.Message}"); }
+            }));
         menu.Items.Add(new MenuFlyoutSeparator());
         menu.Items.Add(new MenuFlyoutItem { Text = "删除", Icon = new FontIcon { Glyph = "\uE74D" } }
             .Tap(async () => await ConfirmDeleteAsync(vm)));
-        menu.ShowAt(TaskList);
+        menu.ShowAt(anchor);
     }
 
     private static void OpenFile(DownloadTaskInfo t) => Shell.OpenFile(t.FilePath);
@@ -650,10 +716,42 @@ public partial class MainWindow : Window
             await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile: false);
     }
 
-    private async Task ShowNewDownloadDialog()
+    private async Task ShowNewDownloadDialog(string? initialUrl = null)
     {
-        var dlg = new NewDownloadDialog(App.Host!) { XamlRoot = RootGrid.XamlRoot };
+        App.Log($"[ui] ShowNewDownloadDialog 打开 预填长度={initialUrl?.Length ?? 0}");
+        var dlg = new NewDownloadDialog(App.Host!, initialUrl) { XamlRoot = RootGrid.XamlRoot };
         await dlg.ShowAsync();
+        App.Log("[ui] ShowNewDownloadDialog 返回（对话框已关闭）");
+    }
+
+    /// <summary>处理外部唤起的磁力链接（magnet: 协议）：主窗口保持不动，直接弹独立确认窗口。</summary>
+    public void HandleExternalMagnet(string url)
+    {
+        App.Log($"[magnet] 收到外部磁力链接: {(url.Length > 80 ? url[..80] + "…" : url)}");
+        ShowMagnetConfirmWindow(url);
+    }
+
+    /// <summary>浏览器扩展 /api/download 转发的磁力链接（监听线程触发，需切回 UI 线程）。</summary>
+    private void OnApiMagnetConfirm(string url) => ShowMagnetConfirmWindow(url);
+
+    /// <summary>弹出独立的磁力确认窗口（浏览器扩展 / 系统 magnet: 协议共用）。</summary>
+    public void ShowMagnetConfirmWindow(string url)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            try
+            {
+                var win = new MagnetConfirmWindow(url);
+                win.Activate();
+                // 触发源常在后台（浏览器扩展），必须强制拉到前台，否则用户看不到
+                WindowEffects.ForceForeground(win);
+                App.Log("[magnet] 磁力确认窗口已弹出");
+            }
+            catch (Exception ex)
+            {
+                App.Log($"[magnet] 打开磁力确认窗口失败: {ex}");
+            }
+        });
     }
 
     private void ShowSettingsDialog()

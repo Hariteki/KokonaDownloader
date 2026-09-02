@@ -10,9 +10,19 @@
 
     <StackPanel Spacing="14" Padding="0,8,0,0">
         <StackPanel Spacing="4">
-            <TextBlock Text="下载地址（每行一个，支持批量）" FontSize="13"/>
+            <TextBlock Text="下载地址（每行一个，支持批量；支持磁力链接）" FontSize="13"/>
             <TextBox x:Name="UrlBox" AcceptsReturn="True" TextWrapping="Wrap" Height="96"
-                     PlaceholderText="https://example.com/file.zip"/>
+                     PlaceholderText="https://example.com/file.zip&#x0a;magnet:?xt=urn:btih:…"/>
+            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                <Button Content="选择 .torrent 文件…" Click="OnBrowseTorrent"/>
+                <TextBlock x:Name="TorrentFileText" VerticalAlignment="Center" FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="Collapsed"/>
+                <HyperlinkButton x:Name="ClearTorrentBtn" Content="清除" Padding="4,0"
+                                 Click="OnClearTorrent" Visibility="Collapsed"/>
+            </StackPanel>
+            <TextBlock x:Name="TorrentHint" FontSize="12" Visibility="Collapsed"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       Text="已选择种子文件，提交后忽略地址栏内容；文件名与线程数由种子决定。"/>
         </StackPanel>
 
         <StackPanel Spacing="4">
@@ -27,12 +37,12 @@
             </Grid>
         </StackPanel>
 
-        <StackPanel Spacing="4">
+        <StackPanel x:Name="FileNamePanel" Spacing="4">
             <TextBlock Text="文件名（留空则自动识别）" FontSize="13"/>
             <TextBox x:Name="FileNameBox" PlaceholderText="自动"/>
         </StackPanel>
 
-        <Grid ColumnSpacing="16">
+        <Grid ColumnSpacing="16" x:Name="OptionsGrid">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="*"/>

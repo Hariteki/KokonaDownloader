@@ -40,13 +40,23 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        // 单实例：已运行则激活现有窗口
+        // 命令行中的磁力链接（magnet: 协议唤起）
+        var magnetArg = Environment.GetCommandLineArgs()
+            .Skip(1).FirstOrDefault(a => a.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase));
+
+        // 单实例：已运行则激活现有窗口并转发磁力链接
         _mutex = new Mutex(true, @"Local\KokonaDownloader_SingleInstance", out var isNew);
         if (!isNew)
         {
-            // 通知已有实例显示窗口（通过命名事件）
             try
             {
+                // 优先经命名管道把磁力链接转发给运行中的实例
+                if (magnetArg != null && MagnetIpc.TrySend(magnetArg))
+                {
+                    Exit();
+                    return;
+                }
+                // 通知已有实例显示窗口（通过命名事件）
                 using var ev = System.Threading.EventWaitHandle.OpenExisting(@"Local\KokonaDownloader_ShowWindow");
                 ev.Set();
             }
@@ -78,7 +88,17 @@ public partial class App : Application
         ThemeService.Initialize();
 
         MainWin = new MainWindow();
-        if (Environment.GetCommandLineArgs().Any(a => a.Equals("--minimized", StringComparison.OrdinalIgnoreCase)))
+
+        // magnet: 协议唤起的 IPC 服务端 + 注册表注册（HKCU，无需管理员）
+        MagnetIpc.StartServer(url => MainWin?.HandleExternalMagnet(url));
+        MagnetProtocol.Register();
+
+        if (magnetArg != null)
+        {
+            // 首实例带磁力链接启动：弹出独立的磁力确认窗口，主窗口保持隐藏
+            MainWin.HandleExternalMagnet(magnetArg);
+        }
+        else if (Environment.GetCommandLineArgs().Any(a => a.Equals("--minimized", StringComparison.OrdinalIgnoreCase)))
         {
             // 开机自启静默启动：只出现在托盘，不显示主窗口，等用户从托盘唤起
             MainWin.AppWindow.Hide();
@@ -99,6 +119,9 @@ public partial class App : Application
             win.AppWindow.Show();
             if (win.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter p) p.Restore();
             win.Activate();
+            // 托盘唤起时焦点常在别的进程窗口上，Activate 受系统前台锁定限制不会置顶，
+            // 需 AttachThreadInput 强制拉到前台（与进度小窗/磁力确认窗同一处理）
+            WindowEffects.ForceForeground(win);
         });
     }
 

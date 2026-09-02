@@ -5,6 +5,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:converters="using:KokonaDownloader.App.Converters"
+    xmlns:local="using:KokonaDownloader.App"
     mc:Ignorable="d"
     Title="海兔下载器">
 
@@ -30,7 +31,35 @@
                                         <SolidColorBrush x:Name="TabBrush" Color="{ThemeResource TabInactiveColor}"/>
                                     </ContentPresenter.Foreground>
                                 </ContentPresenter>
+                                <Border x:Name="TabHover" CornerRadius="6" IsHitTestVisible="False">
+                                    <Border.Background>
+                                        <SolidColorBrush x:Name="TabHoverBrush" Color="Transparent"/>
+                                    </Border.Background>
+                                </Border>
                                 <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="PointerOver">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="TabHoverBrush" Storyboard.TargetProperty="Color"
+                                                                To="#14FFFFFF" Duration="0:0:0.15">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="TabHoverBrush" Storyboard.TargetProperty="Color"
+                                                                To="#33000000" Duration="0:0:0.08">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
                                     <VisualStateGroup x:Name="CheckStates">
                                         <VisualState x:Name="Checked">
                                             <Storyboard>
@@ -55,6 +84,116 @@
                                     </VisualStateGroup>
                                 </VisualStateManager.VisualStateGroups>
                             </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <!-- BT 右上角独立按钮：磁力图标 + 文字胶囊，选中态同 Tab 高亮色 -->
+            <Style x:Key="BtToggleButtonStyle" TargetType="RadioButton">
+                <Setter Property="MinWidth" Value="0"/>
+                <Setter Property="MinHeight" Value="0"/>
+                <Setter Property="Padding" Value="12,6"/>
+                <Setter Property="FontSize" Value="15"/>
+                <Setter Property="FontWeight" Value="Bold"/>
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <Border x:Name="BtRoot" CornerRadius="6">
+                                <Border.Background>
+                                    <SolidColorBrush x:Name="BtFillBrush" Color="{ThemeResource TabSurfaceColor}"/>
+                                </Border.Background>
+                                <Grid>
+                                    <Border x:Name="BtHover" CornerRadius="6" IsHitTestVisible="False">
+                                        <Border.Background>
+                                            <SolidColorBrush x:Name="BtHoverBrush" Color="Transparent"/>
+                                        </Border.Background>
+                                    </Border>
+                                    <StackPanel Orientation="Horizontal" Spacing="6" Padding="{TemplateBinding Padding}">
+                                        <FontIcon Glyph="&#xE896;" FontSize="14">
+                                            <FontIcon.Foreground>
+                                                <SolidColorBrush x:Name="BtIconBrush" Color="{ThemeResource TabInactiveColor}"/>
+                                            </FontIcon.Foreground>
+                                        </FontIcon>
+                                        <ContentPresenter Content="{TemplateBinding Content}">
+                                            <ContentPresenter.Foreground>
+                                                <SolidColorBrush x:Name="BtTextBrush" Color="{ThemeResource TabInactiveColor}"/>
+                                            </ContentPresenter.Foreground>
+                                        </ContentPresenter>
+                                    </StackPanel>
+                                </Grid>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="PointerOver">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="BtHoverBrush" Storyboard.TargetProperty="Color"
+                                                                To="#14FFFFFF" Duration="0:0:0.15">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="BtHoverBrush" Storyboard.TargetProperty="Color"
+                                                                To="#33000000" Duration="0:0:0.08">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                    <VisualStateGroup x:Name="CheckStates">
+                                        <VisualState x:Name="Checked">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="BtFillBrush" Storyboard.TargetProperty="Color"
+                                                                To="{ThemeResource TabAccentColor}" Duration="0:0:0.18">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                                <ColorAnimation Storyboard.TargetName="BtIconBrush" Storyboard.TargetProperty="Color"
+                                                                To="White" Duration="0:0:0.18">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                                <ColorAnimation Storyboard.TargetName="BtTextBrush" Storyboard.TargetProperty="Color"
+                                                                To="White" Duration="0:0:0.18">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Unchecked">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="BtFillBrush" Storyboard.TargetProperty="Color"
+                                                                To="{ThemeResource TabSurfaceColor}" Duration="0:0:0.15">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                                <ColorAnimation Storyboard.TargetName="BtIconBrush" Storyboard.TargetProperty="Color"
+                                                                To="{ThemeResource TabInactiveColor}" Duration="0:0:0.15">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                                <ColorAnimation Storyboard.TargetName="BtTextBrush" Storyboard.TargetProperty="Color"
+                                                                To="{ThemeResource TabInactiveColor}" Duration="0:0:0.15">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                            </Border>
                         </ControlTemplate>
                     </Setter.Value>
                 </Setter>
@@ -113,6 +252,80 @@
                         </ControlTemplate>
                     </Setter.Value>
                 </Setter>
+            </Style>
+            <!-- 圆角卡片修复：本 SDK 默认模板中 presenter 的 CornerRadius 绑定的是
+                 主题资源键而非控件属性，样式里直接设 CornerRadius 不生效。此模板
+                 逐字复制自 generic.xaml 的 DefaultListViewItemStyle，唯一差异是
+                 CornerRadius 改为 TemplateBinding，由 Setter 提供圆角；
+                 Margin 让相邻卡片留出间距、右侧与列表左 Padding 对齐。
+                 主列表与 BT 专用页共用 -->
+            <Style x:Key="CardItemStyle" TargetType="ListViewItem">
+                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                <Setter Property="MinHeight" Value="76"/>
+                <Setter Property="Padding" Value="4,2"/>
+                <Setter Property="Margin" Value="0,3,12,3"/>
+                <Setter Property="CornerRadius" Value="8"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ListViewItem">
+                            <ListViewItemPresenter x:Name="Root"
+                                ContentTransitions="{TemplateBinding ContentTransitions}"
+                                Control.IsTemplateFocusTarget="True"
+                                FocusVisualMargin="{TemplateBinding FocusVisualMargin}"
+                                FocusVisualPrimaryBrush="{TemplateBinding FocusVisualPrimaryBrush}"
+                                FocusVisualPrimaryThickness="{TemplateBinding FocusVisualPrimaryThickness}"
+                                FocusVisualSecondaryBrush="{TemplateBinding FocusVisualSecondaryBrush}"
+                                FocusVisualSecondaryThickness="{TemplateBinding FocusVisualSecondaryThickness}"
+                                SelectionCheckMarkVisualEnabled="{ThemeResource ListViewItemSelectionCheckMarkVisualEnabled}"
+                                CheckBrush="{ThemeResource ListViewItemCheckBrush}"
+                                CheckBoxBrush="{ThemeResource ListViewItemCheckBoxBrush}"
+                                DragBackground="{ThemeResource ListViewItemDragBackground}"
+                                DragForeground="{ThemeResource ListViewItemDragForeground}"
+                                FocusBorderBrush="{ThemeResource ListViewItemFocusBorderBrush}"
+                                FocusSecondaryBorderBrush="{ThemeResource ListViewItemFocusSecondaryBorderBrush}"
+                                PlaceholderBackground="{ThemeResource ListViewItemPlaceholderBackground}"
+                                PointerOverBackground="{ThemeResource ListViewItemBackgroundPointerOver}"
+                                PointerOverForeground="{ThemeResource ListViewItemForegroundPointerOver}"
+                                SelectedBackground="{ThemeResource ListViewItemBackgroundSelected}"
+                                SelectedForeground="{ThemeResource ListViewItemForegroundSelected}"
+                                SelectedPointerOverBackground="{ThemeResource ListViewItemBackgroundSelectedPointerOver}"
+                                PressedBackground="{ThemeResource ListViewItemBackgroundPressed}"
+                                SelectedPressedBackground="{ThemeResource ListViewItemBackgroundSelectedPressed}"
+                                DisabledOpacity="{ThemeResource ListViewItemDisabledThemeOpacity}"
+                                DragOpacity="{ThemeResource ListViewItemDragThemeOpacity}"
+                                ReorderHintOffset="{ThemeResource ListViewItemReorderHintThemeOffset}"
+                                HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                ContentMargin="{TemplateBinding Padding}"
+                                CheckMode="{ThemeResource ListViewItemCheckMode}"
+                                CornerRadius="{TemplateBinding CornerRadius}"
+                                CheckPressedBrush="{ThemeResource ListViewItemCheckPressedBrush}"
+                                CheckDisabledBrush="{ThemeResource ListViewItemCheckDisabledBrush}"
+                                CheckBoxPointerOverBrush="{ThemeResource ListViewItemCheckBoxPointerOverBrush}"
+                                CheckBoxPressedBrush="{ThemeResource ListViewItemCheckBoxPressedBrush}"
+                                CheckBoxSelectedBrush="{ThemeResource ListViewItemCheckBoxSelectedBrush}"
+                                CheckBoxSelectedPointerOverBrush="{ThemeResource ListViewItemCheckBoxSelectedPointerOverBrush}"
+                                CheckBoxSelectedPressedBrush="{ThemeResource ListViewItemCheckBoxSelectedPressedBrush}"
+                                CheckBoxSelectedDisabledBrush="{ThemeResource ListViewItemCheckBoxSelectedDisabledBrush}"
+                                CheckBoxBorderBrush="{ThemeResource ListViewItemCheckBoxBorderBrush}"
+                                CheckBoxPointerOverBorderBrush="{ThemeResource ListViewItemCheckBoxPointerOverBorderBrush}"
+                                CheckBoxPressedBorderBrush="{ThemeResource ListViewItemCheckBoxPressedBorderBrush}"
+                                CheckBoxDisabledBorderBrush="{ThemeResource ListViewItemCheckBoxDisabledBorderBrush}"
+                                CheckBoxCornerRadius="{ThemeResource ListViewItemCheckBoxCornerRadius}"
+                                SelectionIndicatorCornerRadius="{ThemeResource ListViewItemSelectionIndicatorCornerRadius}"
+                                SelectionIndicatorVisualEnabled="{ThemeResource ListViewItemSelectionIndicatorVisualEnabled}"
+                                SelectionIndicatorBrush="{ThemeResource ListViewItemSelectionIndicatorBrush}"
+                                SelectionIndicatorPointerOverBrush="{ThemeResource ListViewItemSelectionIndicatorPressedBrush}"
+                                SelectionIndicatorPressedBrush="{ThemeResource ListViewItemSelectionIndicatorPressedBrush}"
+                                SelectionIndicatorDisabledBrush="{ThemeResource ListViewItemSelectionIndicatorDisabledBrush}"
+                                SelectedDisabledBackground="{ThemeResource ListViewItemBackgroundSelectedDisabled}" />
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <!-- BT 大卡片：预留完整方块矩阵（12px 块 + 分片统计文字）的更高行高 -->
+            <Style x:Key="BtCardItemStyle" TargetType="ListViewItem" BasedOn="{StaticResource CardItemStyle}">
+                <Setter Property="MinHeight" Value="130"/>
             </Style>
         </Grid.Resources>
         <Grid.RowDefinitions>
@@ -184,120 +397,58 @@
                 <RadioButton x:Name="FilterPaused" Content="已暂停" GroupName="Filter" Click="OnFilterChanged" Style="{StaticResource FilterTabStyle}"/>
                 <RadioButton x:Name="FilterDone" Content="已完成" GroupName="Filter" Click="OnFilterChanged" Style="{StaticResource FilterTabStyle}"/>
                 <RadioButton x:Name="FilterFailed" Content="失败" GroupName="Filter" Click="OnFilterChanged" Style="{StaticResource FilterTabStyle}"/>
-                <Border Width="1" Height="16" Margin="8,0" VerticalAlignment="Center"
-                        Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-                <Button x:Name="BtnBatch" ToolTipService.ToolTip="筛选任务" AutomationProperties.Name="筛选任务"
-                        Background="Transparent" BorderThickness="0" Padding="8,2" MinHeight="28">
-                    <StackPanel Orientation="Horizontal" Spacing="4">
-                        <FontIcon Glyph="&#xE71C;" FontSize="13"/>
-                        <TextBlock Text="筛选" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                    </StackPanel>
-                    <Button.Flyout>
-                        <MenuFlyout Placement="Bottom">
-                            <MenuFlyoutItem Text="全选" Click="OnSelectAllClick"/>
-                            <MenuFlyoutItem Text="反选" Click="OnInvertSelectionClick"/>
-                            <MenuFlyoutItem Text="取消选择" Click="OnClearSelectionClick"/>
-                            <MenuFlyoutSeparator/>
-                            <MenuFlyoutItem Text="暂停选中" Click="OnBatchPauseClick">
-                                <MenuFlyoutItem.Icon>
-                                    <FontIcon Glyph="&#xE769;"/>
-                                </MenuFlyoutItem.Icon>
-                            </MenuFlyoutItem>
-                            <MenuFlyoutItem Text="继续选中" Click="OnBatchResumeClick">
-                                <MenuFlyoutItem.Icon>
-                                    <FontIcon Glyph="&#xE768;"/>
-                                </MenuFlyoutItem.Icon>
-                            </MenuFlyoutItem>
-                            <MenuFlyoutItem Text="删除选中" Click="OnBatchDeleteClick" Foreground="{ThemeResource SystemFillColorCriticalBrush}">
-                                <MenuFlyoutItem.Icon>
-                                    <FontIcon Glyph="&#xE74D;" Foreground="{ThemeResource SystemFillColorCriticalBrush}"/>
-                                </MenuFlyoutItem.Icon>
-                            </MenuFlyoutItem>
-                        </MenuFlyout>
-                    </Button.Flyout>
-                </Button>
+                <!-- 批量选择仅作用于常规列表，BT 专用页隐藏以免误操作不可见列表 -->
+                <StackPanel x:Name="BatchPanel" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Width="1" Height="16" Margin="8,0" VerticalAlignment="Center"
+                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                    <Button x:Name="BtnBatch" ToolTipService.ToolTip="筛选任务" AutomationProperties.Name="筛选任务"
+                            Background="Transparent" BorderThickness="0" Padding="8,2" MinHeight="28">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <FontIcon Glyph="&#xE71C;" FontSize="13"/>
+                            <TextBlock Text="筛选" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        </StackPanel>
+                        <Button.Flyout>
+                            <MenuFlyout Placement="Bottom">
+                                <MenuFlyoutItem Text="全选" Click="OnSelectAllClick"/>
+                                <MenuFlyoutItem Text="反选" Click="OnInvertSelectionClick"/>
+                                <MenuFlyoutItem Text="取消选择" Click="OnClearSelectionClick"/>
+                                <MenuFlyoutSeparator/>
+                                <MenuFlyoutItem Text="暂停选中" Click="OnBatchPauseClick">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE769;"/>
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="继续选中" Click="OnBatchResumeClick">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE768;"/>
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="删除选中" Click="OnBatchDeleteClick" Foreground="{ThemeResource SystemFillColorCriticalBrush}">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE74D;" Foreground="{ThemeResource SystemFillColorCriticalBrush}"/>
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                            </MenuFlyout>
+                        </Button.Flyout>
+                    </Button>
+                </StackPanel>
             </StackPanel>
-            <AutoSuggestBox x:Name="SearchBox" Grid.Column="1" PlaceholderText="搜索"
-                            QueryIcon="Find" Width="200" MinWidth="120" VerticalAlignment="Center"
-                            TextChanged="OnSearchTextChanged"/>
+            <!-- 右上角：BT 专用视图入口（独立按钮） + 搜索框 -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <RadioButton x:Name="FilterBt" GroupName="Filter" Click="OnFilterChanged"
+                             Style="{StaticResource BtToggleButtonStyle}" Content="BT下载"
+                             ToolTipService.ToolTip="磁力链接 / 种子文件" AutomationProperties.Name="BT 任务视图"/>
+                <AutoSuggestBox x:Name="SearchBox" PlaceholderText="搜索"
+                                QueryIcon="Find" Width="200" MinWidth="120" VerticalAlignment="Center"
+                                TextChanged="OnSearchTextChanged"/>
+            </StackPanel>
         </Grid>
 
         <!-- 任务列表：Extended 支持单击选中/Ctrl/Shift 多选，"全选/反选"菜单也可用 -->
         <ListView x:Name="TaskList" Grid.Row="3" Padding="12,0"
                   SelectionMode="Extended" IsItemClickEnabled="False"
-                  RightTapped="OnTaskRightTapped">
-            <!-- 圆角卡片修复：本 SDK 默认模板中 presenter 的 CornerRadius 绑定的是
-                 主题资源键而非控件属性，样式里直接设 CornerRadius 不生效。此模板
-                 逐字复制自 generic.xaml 的 DefaultListViewItemStyle，唯一差异是
-                 CornerRadius 改为 TemplateBinding，由下方 Setter 提供圆角；
-                 Margin 让相邻卡片留出间距、右侧与列表左 Padding 对齐 -->
-            <ListView.ItemContainerStyle>
-                <Style TargetType="ListViewItem">
-                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                    <Setter Property="MinHeight" Value="76"/>
-                    <Setter Property="Padding" Value="4,2"/>
-                    <Setter Property="Margin" Value="0,3,12,3"/>
-                    <Setter Property="CornerRadius" Value="8"/>
-                    <Setter Property="Template">
-                        <Setter.Value>
-                            <ControlTemplate TargetType="ListViewItem">
-                                <ListViewItemPresenter x:Name="Root"
-                                    ContentTransitions="{TemplateBinding ContentTransitions}"
-                                    Control.IsTemplateFocusTarget="True"
-                                    FocusVisualMargin="{TemplateBinding FocusVisualMargin}"
-                                    FocusVisualPrimaryBrush="{TemplateBinding FocusVisualPrimaryBrush}"
-                                    FocusVisualPrimaryThickness="{TemplateBinding FocusVisualPrimaryThickness}"
-                                    FocusVisualSecondaryBrush="{TemplateBinding FocusVisualSecondaryBrush}"
-                                    FocusVisualSecondaryThickness="{TemplateBinding FocusVisualSecondaryThickness}"
-                                    SelectionCheckMarkVisualEnabled="{ThemeResource ListViewItemSelectionCheckMarkVisualEnabled}"
-                                    CheckBrush="{ThemeResource ListViewItemCheckBrush}"
-                                    CheckBoxBrush="{ThemeResource ListViewItemCheckBoxBrush}"
-                                    DragBackground="{ThemeResource ListViewItemDragBackground}"
-                                    DragForeground="{ThemeResource ListViewItemDragForeground}"
-                                    FocusBorderBrush="{ThemeResource ListViewItemFocusBorderBrush}"
-                                    FocusSecondaryBorderBrush="{ThemeResource ListViewItemFocusSecondaryBorderBrush}"
-                                    PlaceholderBackground="{ThemeResource ListViewItemPlaceholderBackground}"
-                                    PointerOverBackground="{ThemeResource ListViewItemBackgroundPointerOver}"
-                                    PointerOverForeground="{ThemeResource ListViewItemForegroundPointerOver}"
-                                    SelectedBackground="{ThemeResource ListViewItemBackgroundSelected}"
-                                    SelectedForeground="{ThemeResource ListViewItemForegroundSelected}"
-                                    SelectedPointerOverBackground="{ThemeResource ListViewItemBackgroundSelectedPointerOver}"
-                                    PressedBackground="{ThemeResource ListViewItemBackgroundPressed}"
-                                    SelectedPressedBackground="{ThemeResource ListViewItemBackgroundSelectedPressed}"
-                                    DisabledOpacity="{ThemeResource ListViewItemDisabledThemeOpacity}"
-                                    DragOpacity="{ThemeResource ListViewItemDragThemeOpacity}"
-                                    ReorderHintOffset="{ThemeResource ListViewItemReorderHintThemeOffset}"
-                                    HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                    VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
-                                    ContentMargin="{TemplateBinding Padding}"
-                                    CheckMode="{ThemeResource ListViewItemCheckMode}"
-                                    CornerRadius="{TemplateBinding CornerRadius}"
-                                    CheckPressedBrush="{ThemeResource ListViewItemCheckPressedBrush}"
-                                    CheckDisabledBrush="{ThemeResource ListViewItemCheckDisabledBrush}"
-                                    CheckBoxPointerOverBrush="{ThemeResource ListViewItemCheckBoxPointerOverBrush}"
-                                    CheckBoxPressedBrush="{ThemeResource ListViewItemCheckBoxPressedBrush}"
-                                    CheckBoxDisabledBrush="{ThemeResource ListViewItemCheckBoxDisabledBrush}"
-                                    CheckBoxSelectedBrush="{ThemeResource ListViewItemCheckBoxSelectedBrush}"
-                                    CheckBoxSelectedPointerOverBrush="{ThemeResource ListViewItemCheckBoxSelectedPointerOverBrush}"
-                                    CheckBoxSelectedPressedBrush="{ThemeResource ListViewItemCheckBoxSelectedPressedBrush}"
-                                    CheckBoxSelectedDisabledBrush="{ThemeResource ListViewItemCheckBoxSelectedDisabledBrush}"
-                                    CheckBoxBorderBrush="{ThemeResource ListViewItemCheckBoxBorderBrush}"
-                                    CheckBoxPointerOverBorderBrush="{ThemeResource ListViewItemCheckBoxPointerOverBorderBrush}"
-                                    CheckBoxPressedBorderBrush="{ThemeResource ListViewItemCheckBoxPressedBorderBrush}"
-                                    CheckBoxDisabledBorderBrush="{ThemeResource ListViewItemCheckBoxDisabledBorderBrush}"
-                                    CheckBoxCornerRadius="{ThemeResource ListViewItemCheckBoxCornerRadius}"
-                                    SelectionIndicatorCornerRadius="{ThemeResource ListViewItemSelectionIndicatorCornerRadius}"
-                                    SelectionIndicatorVisualEnabled="{ThemeResource ListViewItemSelectionIndicatorVisualEnabled}"
-                                    SelectionIndicatorBrush="{ThemeResource ListViewItemSelectionIndicatorBrush}"
-                                    SelectionIndicatorPointerOverBrush="{ThemeResource ListViewItemSelectionIndicatorPointerOverBrush}"
-                                    SelectionIndicatorPressedBrush="{ThemeResource ListViewItemSelectionIndicatorPressedBrush}"
-                                    SelectionIndicatorDisabledBrush="{ThemeResource ListViewItemSelectionIndicatorDisabledBrush}"
-                                    SelectedDisabledBackground="{ThemeResource ListViewItemBackgroundSelectedDisabled}" />
-                            </ControlTemplate>
-                        </Setter.Value>
-                    </Setter>
-                </Style>
-            </ListView.ItemContainerStyle>
+                  RightTapped="OnTaskRightTapped"
+                  ItemContainerStyle="{StaticResource CardItemStyle}">
             <ListView.ItemTemplate>
                 <DataTemplate>
                     <Grid Padding="16,12" ColumnSpacing="12" Background="Transparent"
@@ -345,10 +496,16 @@
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                         </StackPanel>
 
+                        <!-- 常规任务：进度条；BT 任务：Motrix 式分片方块矩阵（紧凑单行，最多 100 块） -->
                         <ProgressBar Grid.Row="1" Grid.ColumnSpan="4" Value="{Binding Progress}" Minimum="0" Maximum="100"
-                                     HorizontalAlignment="Stretch" CornerRadius="9" Margin="0,8,0,0"/>
+                                     HorizontalAlignment="Stretch" CornerRadius="9" Margin="0,8,0,0"
+                                     Visibility="{Binding IsBt, Converter={StaticResource BoolToVis}, ConverterParameter=invert}"/>
+                        <local:BtPieceGrid Grid.Row="1" Grid.ColumnSpan="4" Margin="0,8,0,0"
+                                           Compact="True" MetaVisible="False"
+                                           BitField="{Binding BitField}" NumPieces="{Binding NumPieces}" IsActive="{Binding IsActive}"
+                                           Visibility="{Binding IsBt, Converter={StaticResource BoolToVis}}"/>
 
-                        <!-- 右上角红绿灯：绿=下载中 黄=暂停/排队 蓝=已完成 红=失败；底层为同色径向光晕 -->
+                        <!-- 右上角红绿灯：绿=下载中 青=做种中 黄=暂停/排队 蓝=已完成 红=失败；底层为同色径向光晕 -->
                         <Ellipse Grid.ColumnSpan="4" Width="20" Height="20" HorizontalAlignment="Right" VerticalAlignment="Top"
                                  Margin="0,-14,-16,0" Fill="{Binding StatusGlowBrush}" IsHitTestVisible="False"/>
                         <Ellipse Grid.ColumnSpan="4" Width="10" Height="10" HorizontalAlignment="Right" VerticalAlignment="Top"
@@ -358,23 +515,128 @@
             </ListView.ItemTemplate>
         </ListView>
 
-        <!-- 空状态：跨列表+底部状态栏两行，在可视区域中央居中 -->
-        <StackPanel x:Name="EmptyState" Grid.Row="3" Grid.RowSpan="2" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" Visibility="Collapsed">
-            <FontIcon Glyph="&#xE896;" FontSize="48" Foreground="{ThemeResource TextFillColorDisabledBrush}" HorizontalAlignment="Center"/>
-            <TextBlock Text="暂无下载任务" FontSize="16" Foreground="{ThemeResource TextFillColorSecondaryBrush}" HorizontalAlignment="Center"/>
-            <TextBlock Text="点击左上角“新建下载”开始" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" HorizontalAlignment="Center"/>
-        </StackPanel>
+        <!-- BT 专用页：概要条 + 大卡片列表（完整方块矩阵 12px、最多 400 块，含分片统计） -->
+        <Grid x:Name="BtPage" Grid.Row="3" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
 
-        <!-- 底部状态栏 -->
-        <Grid Grid.Row="4" Padding="16,8" ColumnSpacing="24">
-            <StackPanel Orientation="Horizontal" Spacing="24">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <FontIcon Glyph="&#xE896;" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                    <TextBlock x:Name="GlobalSpeedText" Text="0 B/s" FontSize="13"/>
+            <Border Grid.Row="0" Margin="16,4,16,10" Padding="12,8" CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Orientation="Horizontal" Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE896;" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock x:Name="BtSummaryText" Text="暂无 BT 任务" FontSize="12"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE898;" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock x:Name="BtUploadText" Text="" FontSize="12"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
                 </StackPanel>
-                <TextBlock x:Name="ActiveCountText" Text="活动 0 · 等待 0" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                <TextBlock x:Name="ConnStatusText" Text="引擎运行中" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            </StackPanel>
+            </Border>
+
+            <ListView x:Name="BtList" Grid.Row="1" Padding="12,0"
+                      SelectionMode="Extended" IsItemClickEnabled="False"
+                      RightTapped="OnTaskRightTapped"
+                      ItemContainerStyle="{StaticResource BtCardItemStyle}">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Padding="16,14" RowSpacing="10" Background="Transparent"
+                              DoubleTapped="OnItemDoubleTapped" ToolTipService.ToolTip="双击打开所在位置">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <Grid Grid.Row="0" ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Spacing="3">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" FontSize="14"/>
+                                    <TextBlock Text="{Binding StatusText}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                    <Button Padding="6" Click="OnItemPauseClick" Visibility="{Binding PauseVisible, Converter={StaticResource BoolToVis}}" ToolTipService.ToolTip="暂停">
+                                        <FontIcon Glyph="&#xE769;" FontSize="13"/>
+                                    </Button>
+                                    <Button Padding="6" Click="OnItemResumeClick" Visibility="{Binding ResumeVisible, Converter={StaticResource BoolToVis}}" ToolTipService.ToolTip="继续">
+                                        <FontIcon Glyph="&#xE768;" FontSize="13"/>
+                                    </Button>
+                                    <Button Padding="6" Click="OnItemOpenClick" ToolTipService.ToolTip="打开文件夹">
+                                        <FontIcon Glyph="&#xE8DA;" FontSize="13"/>
+                                    </Button>
+                                    <Button Padding="6" Click="OnItemDeleteClick" ToolTipService.ToolTip="删除">
+                                        <FontIcon Glyph="&#xE74D;" FontSize="13"/>
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- 第二行：体量与速率概要 -->
+                            <Grid Grid.Row="1" ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="{Binding SizeText}" FontSize="12" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                <TextBlock Grid.Column="1" Text="{Binding SpeedText}" FontSize="13" VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <!-- 第三行：Motrix 式完整方块矩阵（12px 块、最多 400 块，含分片统计小字） -->
+                            <local:BtPieceGrid Grid.Row="2"
+                                               Compact="False" MetaVisible="True"
+                                               BitField="{Binding BitField}" NumPieces="{Binding NumPieces}" IsActive="{Binding IsActive}"/>
+
+                            <!-- 右上角红绿灯：绿=下载中 青=做种中 黄=暂停/排队 蓝=已完成 红=失败；底层为同色径向光晕 -->
+                            <Ellipse Grid.RowSpan="3" Width="20" Height="20" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                     Margin="0,-16,-16,0" Fill="{Binding StatusGlowBrush}" IsHitTestVisible="False"/>
+                            <Ellipse Grid.RowSpan="3" Width="10" Height="10" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                     Margin="0,-11,-11,0" Fill="{Binding StatusDotBrush}"/>
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
         </Grid>
+
+        <!-- 空状态：无任务时居中提示（悬浮于列表区上方） -->
+        <Border x:Name="EmptyState" Grid.Row="3" Visibility="Collapsed" IsHitTestVisible="False">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="10" Opacity="0.8">
+                <FontIcon Glyph="&#xE753;" FontSize="42" Foreground="{ThemeResource TextFillColorDisabledBrush}"/>
+                <TextBlock Text="暂无任务" HorizontalAlignment="Center" FontSize="15"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                <TextBlock Text="点击左上角“新建下载”，或直接粘贴磁力链接" HorizontalAlignment="Center" FontSize="12"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+            </StackPanel>
+        </Border>
+
+        <!-- 底部状态栏：全局速率 / 活动统计 / 引擎连接状态（无分割线，完全沉浸式） -->
+        <Border Grid.Row="4" Padding="16,6">
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                    <FontIcon Glyph="&#xE896;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock x:Name="GlobalSpeedText" Text="0 B/s" FontSize="12"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+                <TextBlock x:Name="ActiveCountText" Grid.Column="1" Text="活动 0 · 等待 0" FontSize="12" VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                    <Ellipse Width="7" Height="7" VerticalAlignment="Center" Fill="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    <TextBlock x:Name="ConnStatusText" Text="引擎未运行" FontSize="12" VerticalAlignment="Center"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
     </Grid>
 </Window>

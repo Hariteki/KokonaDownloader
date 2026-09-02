@@ -11,7 +11,8 @@ public enum TaskState
     Paused,     // 已暂停
     Completed,  // 已完成
     Failed,     // 失败
-    Removed     // 已删除
+    Removed,    // 已删除
+    Seeding     // 做种中（BT 专属：下载已完成、正在上传分享）
 }
 
 /// <summary>下载任务的运行时快照，供 UI / API 使用。</summary>
@@ -27,13 +28,28 @@ public sealed class DownloadTaskInfo
     public long TotalLength { get; set; }
     public long CompletedLength { get; set; }
     public long DownloadSpeed { get; set; }
+    /// <summary>上传速度（BT 专属，字节/秒）。</summary>
+    public long UploadSpeed { get; set; }
+    /// <summary>HTTP 服务器连接数；BT 任务时为已连接 peer 数。</summary>
     public int Connections { get; set; }
+    /// <summary>BT 任务：种子内可用的做种者数量。</summary>
+    public int NumSeeders { get; set; }
     public int ErrorCode { get; set; }
     public string? ErrorMessage { get; set; }
     public long SpeedLimit { get; set; }
     public int Split { get; set; }
     public DateTime AddedAt { get; set; } = DateTime.Now;
     public DateTime? FinishedAt { get; set; }
+
+    // ---- BitTorrent 专属 ----
+    /// <summary>是否为 BT/磁力任务。</summary>
+    public bool IsBt { get; set; }
+    /// <summary>种子 infohash（小写 hex），用于重复任务预检。</summary>
+    public string? InfoHash { get; set; }
+    /// <summary>分片位图（hex 字符串），渲染方块矩阵的核心数据。</summary>
+    public string? BitField { get; set; }
+    /// <summary>分片总数。</summary>
+    public int NumPieces { get; set; }
 
     public double Progress => TotalLength > 0 ? (double)CompletedLength / TotalLength : 0;
 
@@ -65,6 +81,8 @@ public sealed class NewTaskRequest
     public long SpeedLimit { get; init; }
     public string? Referer { get; init; }
     public List<string>? Headers { get; init; }
+    /// <summary>附加 aria2 选项（BT 做种参数等，键值对透传给 RPC）。</summary>
+    public Dictionary<string, string>? ExtraOptions { get; init; }
 }
 
 /// <summary>引擎启动配置。</summary>
@@ -82,6 +100,22 @@ public sealed class EngineConfig
     public long GlobalSpeedLimit { get; init; }
     /// <summary>轮询间隔（毫秒）。</summary>
     public int PollIntervalMs { get; init; } = 800;
+
+    // ---- BitTorrent ----
+    /// <summary>是否启用 BT/磁力支持（禁用时 aria2 不加载 DHT 等模块）。</summary>
+    public bool BtEnabled { get; init; } = true;
+    /// <summary>BT 监听端口（TCP/UDP 共用）。</summary>
+    public int BtListenPort { get; init; } = 51413;
+    /// <summary>是否做种。</summary>
+    public bool BtSeedEnabled { get; init; } = true;
+    /// <summary>做种分享率（0 = 不限）。</summary>
+    public double SeedRatio { get; init; } = 1.0;
+    /// <summary>做种时长（分钟，0 = 不限时）。</summary>
+    public double SeedTimeMinutes { get; init; }
+    /// <summary>BT 最大 peer 数。</summary>
+    public int BtMaxPeers { get; init; } = 80;
+    /// <summary>额外 tracker 列表（逗号分隔），提升磁力连通性。</summary>
+    public string? BtTrackers { get; init; }
 
     public static string GenerateSecret()
     {
@@ -120,6 +154,36 @@ public sealed class Aria2TaskStatus
     [JsonPropertyName("files")] public List<Aria2File>? Files { get; set; }
     [JsonPropertyName("followedBy")] public List<string>? FollowedBy { get; set; }
     [JsonPropertyName("option")] public Dictionary<string, string>? Option { get; set; }
+
+    // ---- BitTorrent 字段 ----
+    /// <summary>种子 infohash（小写 hex），tell* 全字段返回时携带。</summary>
+    [JsonPropertyName("infoHash")] public string? InfoHash { get; set; }
+    /// <summary>分片位图（hex 字符串），渲染方块矩阵的核心数据。</summary>
+    [JsonPropertyName("bitfield")] public string? BitField { get; set; }
+    [JsonPropertyName("numPieces")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long NumPieces { get; set; }
+    [JsonPropertyName("pieceLength")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long PieceLength { get; set; }
+    [JsonPropertyName("numSeeders")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public int NumSeeders { get; set; }
+    /// <summary>本机是否已为做种者（aria2 JSON-RPC 以字符串 "true"/"false" 返回）。</summary>
+    [JsonPropertyName("seeder")] public string? Seeder { get; set; }
+    [JsonPropertyName("bittorrent")] public Aria2BittorrentInfo? Bittorrent { get; set; }
+}
+
+public sealed class Aria2BittorrentInfo
+{
+    [JsonPropertyName("mode")] public string? Mode { get; set; }
+    [JsonPropertyName("announceList")] public List<List<string>>? AnnounceList { get; set; }
+    [JsonPropertyName("info")] public Aria2BittorrentInfoData? Info { get; set; }
+}
+
+public sealed class Aria2BittorrentInfoData
+{
+    [JsonPropertyName("name")] public string? Name { get; set; }
 }
 
 public sealed class Aria2File
@@ -172,4 +236,11 @@ public sealed class Aria2RpcException : Exception
 {
     public int Code { get; }
     public Aria2RpcException(int code, string message) : base($"aria2 RPC 错误 [{code}]: {message}") => Code = code;
+}
+
+/// <summary>添加重复任务（同 infohash 的种子任务已存在）时抛出，Message 为可直接展示的友好文案。</summary>
+public sealed class DuplicateTaskException : Exception
+{
+    public string ExistingGid { get; }
+    public DuplicateTaskException(string message, string existingGid = "") : base(message) => ExistingGid = existingGid;
 }

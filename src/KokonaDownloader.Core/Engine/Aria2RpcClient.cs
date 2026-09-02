@@ -118,6 +118,16 @@ public sealed class Aria2RpcClient : IDisposable
         return results.Select(r => r?.GetValue<string>() ?? string.Empty).ToList();
     }
 
+    /// <summary>添加 .torrent 种子任务。aria2.addTorrent 要求种子内容为 base64 编码；
+    /// 第二参数为可选的 Web Seed（HTTP 直链辅助源），此处传空。</summary>
+    public async Task<string> AddTorrentAsync(byte[] torrentData, NewTaskRequest req, CancellationToken ct = default)
+    {
+        var options = BuildOptions(req);
+        var base64 = Convert.ToBase64String(torrentData);
+        var gid = await CallAsync("aria2.addTorrent", new object?[] { base64, Array.Empty<string>(), options }, ct).ConfigureAwait(false);
+        return gid?.GetValue<string>() ?? throw new Aria2RpcException(-1, "addTorrent 未返回 gid");
+    }
+
     public async Task PauseAsync(string gid, CancellationToken ct = default)
         => await CallAsync("aria2.pause", new object?[] { gid }, ct).ConfigureAwait(false);
 
@@ -172,6 +182,14 @@ public sealed class Aria2RpcClient : IDisposable
         await CallAsync("aria2.changeGlobalOption", new object?[] { options }, ct).ConfigureAwait(false);
     }
 
+    /// <summary>通用全局选项修改（如热更新 bt-tracker 列表）。</summary>
+    public async Task ChangeGlobalOptionAsync(Dictionary<string, string> options, CancellationToken ct = default)
+    {
+        var json = new JsonObject();
+        foreach (var kv in options) json[kv.Key] = kv.Value;
+        await CallAsync("aria2.changeGlobalOption", new object?[] { json }, ct).ConfigureAwait(false);
+    }
+
     public async Task SetTaskSpeedLimitAsync(string gid, long bytesPerSec, CancellationToken ct = default)
     {
         var options = new JsonObject { ["max-download-limit"] = bytesPerSec > 0 ? bytesPerSec.ToString() : "0" };
@@ -214,6 +232,10 @@ public sealed class Aria2RpcClient : IDisposable
         // 新建任务总是从零下载：目标文件已存在时直接覆盖。
         // 全局 --continue=true 仅用于重启后恢复未完成任务的断点续传。
         options["continue"] = "false";
+        if (req.ExtraOptions != null)
+        {
+            foreach (var kv in req.ExtraOptions) options[kv.Key] = kv.Value;
+        }
         return options;
     }
 

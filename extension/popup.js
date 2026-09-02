@@ -124,7 +124,7 @@
     const url = urlInput.value.trim();
     if (!url) { showMsg('请先粘贴下载链接', false); return; }
     if (!KokonaLogic.isSupportedUrl(url)) {
-      showMsg('仅支持 http/https/ftp 链接', false);
+      showMsg('仅支持 http/https/ftp/magnet 链接', false);
       return;
     }
     sendBtn.disabled = true;

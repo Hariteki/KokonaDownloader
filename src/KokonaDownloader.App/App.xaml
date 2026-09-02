@@ -12,6 +12,14 @@
             <x:Double x:Key="ProgressBarTrackHeight">18</x:Double>
             <CornerRadius x:Key="ProgressBarCornerRadius">9</CornerRadius>
             <CornerRadius x:Key="ProgressBarTrackCornerRadius">9</CornerRadius>
+            <!-- Tab 栏颜色编译期兜底（ThemeService 启动时按当前主题覆盖为直属键）。
+                 不可省略：窗口 XAML 解析若早于主题注入，ThemeResource 查不到会直接崩溃 -->
+            <Color x:Key="TabAccentColor">#FF4DA1E1</Color>
+            <Color x:Key="TabInactiveColor">#9EFFFFFF</Color>
+            <!-- Tab/BT 按钮未激活填充与 hover/press 反馈色兜底（ThemeService 启动时按主题覆盖） -->
+            <Color x:Key="TabSurfaceColor">#FF2F2F2F</Color>
+            <Color x:Key="TabSurfaceHoverColor">#FF3A3A3A</Color>
+            <Color x:Key="TabSurfacePressedColor">#FF454545</Color>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

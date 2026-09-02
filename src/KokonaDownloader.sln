@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KokonaDownloader.Core.Tests
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KokonaDownloader.App", "KokonaDownloader.App\KokonaDownloader.App.csproj", "{CFDB07E4-6CB3-4EF5-AC97-1E8357E2371F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KokonaDownloader.UiTests", "KokonaDownloader.UiTests\KokonaDownloader.UiTests.csproj", "{D9D1AD69-F01B-4F1F-92DF-D714386F2119}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -30,5 +32,9 @@ Global
 		{CFDB07E4-6CB3-4EF5-AC97-1E8357E2371F}.Debug|Any CPU.Build.0 = Debug|x64
 		{CFDB07E4-6CB3-4EF5-AC97-1E8357E2371F}.Release|Any CPU.ActiveCfg = Release|x64
 		{CFDB07E4-6CB3-4EF5-AC97-1E8357E2371F}.Release|Any CPU.Build.0 = Release|x64
+		{D9D1AD69-F01B-4F1F-92DF-D714386F2119}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{D9D1AD69-F01B-4F1F-92DF-D714386F2119}.Debug|Any CPU.Build.0 = Debug|x64
+		{D9D1AD69-F01B-4F1F-92DF-D714386F2119}.Release|Any CPU.ActiveCfg = Release|x64
+		{D9D1AD69-F01B-4F1F-92DF-D714386F2119}.Release|Any CPU.Build.0 = Release|x64
 	EndGlobalSection
 EndGlobal

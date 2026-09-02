@@ -44,22 +44,26 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="..\..\vendor\aria2\aria2c.exe" CopyToOutputDirectory="PreserveNewest" Link="aria2c.exe" />
+    <None Include="..\..\vendor\aria2\aria2c.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Link="aria2c.exe" />
     <!-- 托盘底图与窗口/任务栏图标（titlebar-tray 造型）：随发布输出，单文件打包时嵌入 exe -->
-    <None Include="..\..\icons\titlebar-tray\tray.ico" CopyToOutputDirectory="PreserveNewest" Link="icons\tray.ico" />
-    <None Include="..\..\icons\titlebar-tray\icon-32.png" CopyToOutputDirectory="PreserveNewest" Link="icons\tray.png" />
+    <None Include="..\..\icons\titlebar-tray\tray.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Link="icons\tray.ico" />
+    <None Include="..\..\icons\titlebar-tray\icon-32.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Link="icons\tray.png" />
   </ItemGroup>
 
   <ItemGroup>
     <Content Include="Assets\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- WindowsPackageType=None 时 publish 默认不带 XBF/PRI，显式补齐，保证发布目录可直接运行 -->
+  <!-- WindowsPackageType=None 时 publish 默认不带 XBF/PRI，显式补齐，保证发布目录可直接运行；
+       单文件发布管线也不会搬运 None 项（aria2c.exe/托盘图标），同样从构建输出目录补齐 -->
   <Target Name="CopyXamlResourcesToPublishDir" AfterTargets="Publish">
     <ItemGroup>
       <_XamlRes Include="$(TargetDir)*.xbf" />
       <_XamlRes Include="$(TargetDir)$(ProjectPriFileName)" />
+      <_XamlRes Include="$(TargetDir)aria2c.exe" />
+      <_TrayIcons Include="$(TargetDir)icons\**\*" />
     </ItemGroup>
     <Copy SourceFiles="@(_XamlRes)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_TrayIcons)" DestinationFolder="$(PublishDir)icons\%(RecursiveDir)" SkipUnchangedFiles="true" />
   </Target>
 </Project>

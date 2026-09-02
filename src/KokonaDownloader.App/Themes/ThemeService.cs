@@ -188,6 +188,10 @@ public static class ThemeService
         // Tab 栏动画用的 Color 类型键（Brush 无法直接用于 ColorAnimation）
         _overrides["TabAccentColor"] = ToColor(t.AccentLight2);
         _overrides["TabInactiveColor"] = ToColor(t.TitleText with { A = 0x9E });
+        // Tab/BT 按钮未激活填充与 hover/press 反馈色：基于卡片底色按白混入梯度，深浅主题均有区分度
+        _overrides["TabSurfaceColor"] = ToColor(ThemeColorMath.Mix(t.CardFill, white, 0.06));
+        _overrides["TabSurfaceHoverColor"] = ToColor(ThemeColorMath.Mix(t.CardFill, white, 0.11));
+        _overrides["TabSurfacePressedColor"] = ToColor(ThemeColorMath.Mix(t.CardFill, white, 0.16));
         _overrides["AccentAAFillColorDefaultBrush"] = Solid(t.Accent);
         _overrides["AccentAAFillColorDisabledBrush"] = Solid(accentDisabled);
         _overrides["AccentControlElevationBorderBrush"] = Solid(accentHover);
@@ -301,5 +305,13 @@ public static class ThemeService
         _overrides["ContentDialogSmokeLayerBrush"] = Solid(white with { A = 0x00 });
         _overrides["ContentDialogSeparatorBorderBrush"] = Solid(t.CardStroke);
         _overrides["ToolTipBackgroundBrush"] = Solid(card3);
+
+        // 镜像写入 Application.Resources 直属键：运行时 Add 进 MergedDictionaries 的覆盖字典
+        // 会被 XamlControlsResources 延迟加载默认样式时重建丢弃（表现为启动数秒后
+        // ThemeResource 查找失败崩溃），直属键不进合并集合、查找优先级最高且稳定存在；
+        // 主题切换经 ForceThemeResourceRefresh 全量重取后仍能取到新值。
+        var appResources = Application.Current.Resources;
+        foreach (var key in _overrides.Keys.ToList())
+            appResources[key] = _overrides[key];
     }
 }

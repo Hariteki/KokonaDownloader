@@ -3,6 +3,7 @@
  * 职责：
  *  1. 自动捕获浏览器下载（downloads.onCreated）→ 转发客户端 → 取消并清除浏览器下载项；
  *  2. 右键菜单「使用海兔下载器下载」手动发送链接/图片；
+ *  2b. 内容脚本（content.js）拦截网页磁力链接左键点击 → 同样走 manualSend 转发；
  *  3. 定时 ping + 密钥校验客户端，维护连接状态并反映到工具栏徽标与弹窗红绿灯；
  *  4. 客户端离线/密钥错误等场景给出友好通知，绝不静默失败。
  */
@@ -269,7 +270,9 @@ async function manualSend(url, referrer) {
     const r = await forwardDownload(s, payload);
     return r.duplicate
       ? { ok: true, message: '客户端已有此任务，无需重复添加' }
-      : { ok: true, message: '已发送到海兔客户端' };
+      : r.confirm
+        ? { ok: true, message: '已送达客户端，请在确认窗口中确认是否下载' }
+        : { ok: true, message: '已发送到海兔客户端' };
   } catch (e) {
     if (e.code === 'offline') {
       connState.online = false;

@@ -63,6 +63,41 @@ public sealed class Aria2Process : IDisposable
         if (_config.GlobalSpeedLimit > 0)
             args = args.Append($"--max-overall-download-limit={_config.GlobalSpeedLimit}").ToArray();
 
+        // BT/磁力支持：DHT + PEX + LPD，follow-torrent=mem 避免往用户目录写 .torrent；
+        // bt-detach-seed-only 让做种任务不占用 max-concurrent-downloads 配额（Motrix 同款方案）
+        if (_config.BtEnabled)
+        {
+            var btArgs = new List<string>
+            {
+                "--enable-dht=true",
+                "--enable-peer-exchange=true",
+                "--bt-enable-lpd=true",
+                $"--listen-port={_config.BtListenPort}",
+                $"--dht-listen-port={_config.BtListenPort}",
+                $"--dht-file-path={Path.Combine(_config.WorkDir, "dht.dat")}",
+                "--dht-entry-point=router.bittorrent.com:6881",
+                "--follow-torrent=mem",
+                "--bt-detach-seed-only=true",
+                $"--bt-max-peers={_config.BtMaxPeers}",
+                // 伪装 Transmission UA/peer-id，避免部分 tracker 封锁 aria2（Motrix 同款做法）
+                "--user-agent=Transmission/2.92",
+                "--peer-id-prefix=-TR2920-"
+            };
+            // 做种策略：关闭做种用 seed-time=0 立即完成；否则按分享率/时长先到为准
+            if (!_config.BtSeedEnabled)
+                btArgs.Add("--seed-time=0");
+            else
+            {
+                if (_config.SeedRatio > 0)
+                    btArgs.Add($"--seed-ratio={_config.SeedRatio.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+                if (_config.SeedTimeMinutes > 0)
+                    btArgs.Add($"--seed-time={_config.SeedTimeMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            }
+            if (!string.IsNullOrWhiteSpace(_config.BtTrackers))
+                btArgs.Add($"--bt-tracker={_config.BtTrackers}");
+            args = args.Concat(btArgs).ToArray();
+        }
+
         var psi = new ProcessStartInfo
         {
             FileName = _config.Aria2Path,

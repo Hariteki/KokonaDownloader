@@ -25,6 +25,22 @@ public sealed class AppSettings
     public bool MinimizeToTrayOnClose { get; set; } = true;
     /// <summary>扩展捕获下载后是否自动拦截浏览器原生下载。</summary>
     public bool InterceptBrowserDownloads { get; set; } = true;
+
+    // ---- BitTorrent / 磁力 ----
+    /// <summary>是否启用 BT/磁力下载支持（需重启引擎生效）。</summary>
+    public bool BtEnabled { get; set; } = true;
+    /// <summary>BT 监听端口（TCP/UDP 共用，需重启引擎生效）。</summary>
+    public int BtPort { get; set; } = 51413;
+    /// <summary>下载完成后是否继续做种。</summary>
+    public bool BtSeedEnabled { get; set; } = true;
+    /// <summary>做种分享率（0 = 不限，达到后自动停止）。</summary>
+    public double SeedRatio { get; set; } = 1.0;
+    /// <summary>做种时长（分钟，0 = 不限时；与分享率任一满足即停止）。</summary>
+    public double SeedTimeMinutes { get; set; } = 0;
+    /// <summary>是否启用自动 tracker 列表（每 24h 从社区列表刷新，提升磁力连通性）。</summary>
+    public bool BtTrackersEnabled { get; set; } = true;
+    /// <summary>上次 tracker 刷新时间（用于 24h TTL 判断）。</summary>
+    public DateTime BtTrackersUpdatedAt { get; set; }
 }
 
 /// <summary>设置存储：加载/保存/变更通知。</summary>
@@ -94,4 +110,6 @@ public static class AppPaths
     public static string NotifiedFile => Path.Combine(DataDir, "notified.json");
     public static string EngineWorkDir => Path.Combine(DataDir, "engine");
     public static string LogFile => Path.Combine(DataDir, "app.log");
+    /// <summary>BT tracker 列表缓存（自动更新用）。</summary>
+    public static string TrackersFile => Path.Combine(DataDir, "trackers.json");
 }

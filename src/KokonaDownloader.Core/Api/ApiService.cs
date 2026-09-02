@@ -107,6 +107,9 @@ public sealed class ApiService : IDisposable
     public bool IsListening => _listener.IsListening;
     public string Version { get; } = "1.0.0";
 
+    /// <summary>收到单条磁力链接（浏览器扩展/系统协议转发）：UI 层订阅后弹独立确认窗口，由用户决定是否下载。</summary>
+    public event Action<string>? MagnetConfirmRequested;
+
     public ApiService(DownloadEngine engine, SettingsStore settings, int port, Action<string>? log = null)
     {
         _engine = engine;
@@ -252,6 +255,8 @@ public sealed class ApiService : IDisposable
         }
         foreach (var u in urls)
         {
+            // 磁力链接由引擎按 BT 参数特判处理，不走 Uri 协议校验
+            if (u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase)) continue;
             if (!Uri.TryCreate(u, UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https" && uri.Scheme != "ftp"))
             {
                 await WriteJson(ctx, 400, new { error = "bad_request", message = $"不支持的下载地址: {u}" }).ConfigureAwait(false);
@@ -271,19 +276,64 @@ public sealed class ApiService : IDisposable
             return;
         }
 
-        var newReq = new NewTaskRequest
+        var dir = string.IsNullOrWhiteSpace(dlReq.Dir) ? null : dlReq.Dir;
+        var limit = dlReq.SpeedLimit;
+
+        // 磁力链接逐条添加（引擎内做 BT 参数特判，不能与普通地址混批），普通地址按原逻辑添加
+        var magnets = urls.Where(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase)).ToList();
+        var normal = urls.Except(magnets).ToList();
+
+        // 单条磁力链接 = 浏览器/系统唤起的确认场景：不再静默建任务，
+        // 唤起 UI 层独立确认窗口由用户决定；立即应答避免扩展长时间等待
+        if (magnets.Count == 1 && normal.Count == 0)
         {
-            Urls = urls,
-            Directory = string.IsNullOrWhiteSpace(dlReq.Dir) ? null : dlReq.Dir,
-            FileName = string.IsNullOrWhiteSpace(dlReq.FileName) ? null : SanitizeFileName(dlReq.FileName),
-            Connections = dlReq.Connections,
-            SpeedLimit = dlReq.SpeedLimit,
-            Referer = dlReq.Referer,
-            Headers = dlReq.Headers
-        };
-        var task = await _engine.AddTaskAsync(newReq).ConfigureAwait(false);
-        _log($"API 新建任务: {task.Gid} <- {string.Join(", ", urls)}");
-        await WriteJson(ctx, 200, new { ok = true, gid = task.Gid }).ConfigureAwait(false);
+            _log($"API 收到磁力链接，等待用户在确认窗口确认: {magnets[0]}");
+            try { MagnetConfirmRequested?.Invoke(magnets[0]); }
+            catch (Exception ex) { _log($"唤起磁力确认窗口失败: {ex.Message}"); }
+            await WriteJson(ctx, 200, new { ok = true, confirm = true }).ConfigureAwait(false);
+            return;
+        }
+
+        var gid = string.Empty;
+        try
+        {
+            foreach (var m in magnets)
+            {
+                var t = await _engine.AddTaskAsync(new NewTaskRequest
+                {
+                    Urls = new List<string> { m },
+                    Directory = dir,
+                    SpeedLimit = limit
+                }).ConfigureAwait(false);
+                gid = string.IsNullOrEmpty(gid) ? t.Gid : gid;
+            }
+
+            if (normal.Count > 0)
+            {
+                var newReq = new NewTaskRequest
+                {
+                    Urls = normal,
+                    Directory = dir,
+                    FileName = string.IsNullOrWhiteSpace(dlReq.FileName) ? null : SanitizeFileName(dlReq.FileName),
+                    Connections = dlReq.Connections,
+                    SpeedLimit = limit,
+                    Referer = dlReq.Referer,
+                    Headers = dlReq.Headers
+                };
+                var task = await _engine.AddTaskAsync(newReq).ConfigureAwait(false);
+                gid = string.IsNullOrEmpty(gid) ? task.Gid : gid;
+            }
+        }
+        catch (DuplicateTaskException dex)
+        {
+            // 种子 infohash 重复（任务已存在/做种中）：与 URL 重复同等应答，扩展端提示即可
+            _log($"API 跳过重复种子任务: {dex.Message}");
+            await WriteJson(ctx, 200, new { ok = true, duplicate = true, message = dex.Message }).ConfigureAwait(false);
+            return;
+        }
+
+        _log($"API 新建任务: {gid} <- {string.Join(", ", urls)}");
+        await WriteJson(ctx, 200, new { ok = true, gid }).ConfigureAwait(false);
     }
 
     private async Task HandleTaskAction(HttpListenerContext ctx, string gid, string action)

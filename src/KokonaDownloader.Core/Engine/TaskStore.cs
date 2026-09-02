@@ -13,6 +13,10 @@ public sealed class TaskMeta
     public DateTime AddedAt { get; set; }
     public DateTime? FinishedAt { get; set; }
     public string? FinalState { get; set; }
+    /// <summary>是否为 BT 任务（磁力/种子）。</summary>
+    public bool IsBt { get; set; }
+    /// <summary>BT 任务来源磁力链接（删除墓碑匹配、重新下载用）。</summary>
+    public string? SourceMagnet { get; set; }
 }
 
 /// <summary>

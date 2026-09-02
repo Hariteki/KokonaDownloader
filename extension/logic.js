@@ -43,10 +43,10 @@ var KokonaLogic = (function () {
         return 'http://' + s.host + ':' + s.port;
     }
 
-    /** 仅支持可由客户端下载的外部协议。 */
+    /** 仅支持可由客户端下载的外部协议（含磁力链接）。 */
     function isSupportedUrl(url) {
         var u = trim(url).toLowerCase();
-        return u.indexOf('http://') === 0 || u.indexOf('https://') === 0 || u.indexOf('ftp://') === 0;
+        return u.indexOf('http://') === 0 || u.indexOf('https://') === 0 || u.indexOf('ftp://') === 0 || u.indexOf('magnet:') === 0;
     }
 
     /** 指向客户端自身 API 的地址不捕获，避免自环。 */
@@ -116,9 +116,11 @@ var KokonaLogic = (function () {
     /** 构造发送给客户端 /api/download 的请求体（与 ApiService.ApiDownloadRequest 契约一致）。 */
     function buildDownloadPayload(item, s) {
         var url = item.url;
+        var isMagnet = trim(url).toLowerCase().indexOf('magnet:') === 0;
         var name = item.filename ? baseName(item.filename) : '';
-        if (!name) name = fileNameFromUrl(url);
-        var payload = { urls: [url], filename: name };
+        if (!name && !isMagnet) name = fileNameFromUrl(url);
+        var payload = { urls: [url] };
+        if (name) payload.filename = name;
         if (item.referrer) payload.referer = item.referrer;
         return payload;
     }

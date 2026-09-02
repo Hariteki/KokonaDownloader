@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <RootNamespace>KokonaDownloader.UiTests</RootNamespace>
+    <AssemblyName>KokonaDownloader.UiTests</AssemblyName>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="8.0.8" />
+  </ItemGroup>
+
+  <!-- 任务/设置持久化类型复用（测试后按应用自身格式清理记录） -->
+  <ItemGroup>
+    <ProjectReference Include="..\KokonaDownloader.Core\KokonaDownloader.Core.csproj" />
+  </ItemGroup>
+
+  <!-- 复用 Core.Tests 的回环做种基础设施（internal 类，源码链接编译） -->
+  <ItemGroup>
+    <Compile Include="..\KokonaDownloader.Core.Tests\BtTestInfra.cs" Link="Infra\BtTestInfra.cs" />
+    <Compile Include="..\KokonaDownloader.Core.Tests\TestEnv.cs" Link="Infra\TestEnv.cs" />
+  </ItemGroup>
+
+  <!-- UIA（System.Windows.Automation）位于 WPF 共享框架内，按 App 工程同款 FrameworkReference 引入，
+       避免开启 UseWPF 触发 XAML 管线 -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+  </ItemGroup>
+
+</Project>

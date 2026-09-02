@@ -15,6 +15,9 @@ public sealed class TaskItemViewModel : INotifyPropertyChanged
     private string _etaText = string.Empty;
     private string _sizeText = string.Empty;
     private string _statusText = string.Empty;
+    private bool _isBt;
+    private long _numPieces;
+    private string? _bitField;
 
     public string Gid { get; private set; } = string.Empty;
     public DownloadTaskInfo Model { get; private set; } = new();
@@ -27,8 +30,15 @@ public sealed class TaskItemViewModel : INotifyPropertyChanged
     public string SizeText { get => _sizeText; private set => Set(ref _sizeText, value); }
     public string StatusText { get => _statusText; private set => Set(ref _statusText, value); }
 
+    /// <summary>是否为 BT 任务（磁力 / .torrent），决定列表卡片显示方块矩阵还是常规进度条。</summary>
+    public bool IsBt { get => _isBt; private set => Set(ref _isBt, value); }
+    /// <summary>分片总数（0 = 元数据未就绪）。</summary>
+    public long NumPieces { get => _numPieces; private set => Set(ref _numPieces, value); }
+    /// <summary>分片位图（aria2 bitfield hex），驱动方块矩阵。</summary>
+    public string? BitField { get => _bitField; private set => Set(ref _bitField, value); }
+
     public bool IsActive => State == TaskState.Active;
-    public bool CanPause => State is TaskState.Active or TaskState.Waiting;
+    public bool CanPause => State is TaskState.Active or TaskState.Waiting or TaskState.Seeding;
     public bool CanResume => State == TaskState.Paused;
 
     // 乐观操作：点击暂停/继续的瞬间覆盖按钮可见性（图标立即切换）并显示过渡小字，
@@ -80,10 +90,11 @@ public sealed class TaskItemViewModel : INotifyPropertyChanged
     /// <summary>清除乐观操作（RPC 失败等异常场景兜底）。</summary>
     public void ClearPending() => PendingAction = null;
 
-    // 红绿灯状态色（亮色）：绿=下载中 黄=暂停/排队 蓝=完成 红=失败
+    // 红绿灯状态色（亮色）：绿=下载中 青=做种中 黄=暂停/排队 蓝=完成 红=失败
     public string StatusColor => State switch
     {
         TaskState.Active => "#4ADE80",
+        TaskState.Seeding => "#2DD4BF",
         TaskState.Waiting => "#FACC15",
         TaskState.Paused => "#FACC15",
         TaskState.Completed => "#60A5FA",
@@ -137,16 +148,29 @@ public sealed class TaskItemViewModel : INotifyPropertyChanged
         Name = info.Name;
         State = info.State;
         Progress = Math.Round(info.Progress * 100, 1);
-        SpeedText = info.State == TaskState.Active ? $"{FormatSpeed(info.DownloadSpeed)}/s" : "";
+        IsBt = info.IsBt;
+        BitField = info.BitField;
+        NumPieces = info.NumPieces;
+        // BT 任务同时展示下行/上行；做种中只展示上行
+        SpeedText = info.State switch
+        {
+            TaskState.Active when info.IsBt && info.UploadSpeed > 0
+                => $"↓ {FormatSpeed(info.DownloadSpeed)} · ↑ {FormatSpeed(info.UploadSpeed)}",
+            TaskState.Active => $"{FormatSpeed(info.DownloadSpeed)}/s",
+            TaskState.Seeding => $"↑ {FormatSpeed(info.UploadSpeed)}",
+            _ => ""
+        };
         EtaText = info.State == TaskState.Active && info.Eta.HasValue ? $"剩余 {FormatTime(info.Eta.Value)}" : "";
         SizeText = info.TotalLength > 0
             ? $"{FormatSize(info.CompletedLength)} / {FormatSize(info.TotalLength)}"
             : FormatSize(info.CompletedLength);
         StatusText = State switch
         {
+            TaskState.Active when info.IsBt && info.NumSeeders > 0 => $"下载中 {Progress:0.#}% · 连接种子 {info.NumSeeders}",
             TaskState.Active => $"下载中 {Progress:0.#}%",
             TaskState.Waiting => "排队中",
             TaskState.Paused => $"已暂停 {Progress:0.#}%",
+            TaskState.Seeding => "做种中",
             TaskState.Completed => "已完成",
             TaskState.Failed => string.IsNullOrEmpty(info.ErrorMessage) ? "失败" : $"失败: {info.ErrorMessage}",
             TaskState.Removed => "已删除",
