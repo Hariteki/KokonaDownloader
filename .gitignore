@@ -20,3 +20,8 @@ _tmp_*
 # 扩展打包产物（私钥绝对不能提交）
 extension.crx
 extension.pem
+
+# 本地 UI 验证脚本与截图、备份、测试站点（不属于仓库内容）
+.verify/
+backup/
+testsite/

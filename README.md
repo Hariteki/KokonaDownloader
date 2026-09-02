@@ -2,7 +2,7 @@
 
 一款基于 Aria2 引擎的 Windows 下载工具。点击浏览器里的下载链接，文件就会自动交给桌面客户端进行多线程高速下载。
 
-![主界面](screenshot/Screenshot02.png)
+![主界面](screenshot/ui_07_main_card_matrix_complete.png)
 
 **它能做什么：**
 
@@ -63,8 +63,10 @@
 ├── src/
 │   ├── KokonaDownloader.App/         WinUI 3 桌面客户端
 │   ├── KokonaDownloader.Core/        核心库：Aria2 封装、设置、计划、通知
-│   └── KokonaDownloader.Core.Tests/  单元测试
+│   ├── KokonaDownloader.Core.Tests/  单元测试
+│   └── KokonaDownloader.UiTests/     UI 冒烟测试
 ├── extension/                        浏览器扩展源码（直接加载即可用）
+├── tests/                            扩展逻辑单元测试（cscript）
 ├── vendor/aria2/                     Aria2 引擎二进制
 ├── screenshot/                       产品截图
 ├── icons/                            应用图标
