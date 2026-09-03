@@ -42,6 +42,8 @@ public sealed class DownloadEngine : IAsyncDisposable
     private volatile ConcurrentDictionary<string, (string Gid, string Name)> _btHashIndex = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _startLock = new();
     private bool _started;
+    /// <summary>最近一次分配的任务编号（时间戳，单调递增），时钟回拨/同毫秒并发时用它保证唯一。</summary>
+    private long _lastTaskNumber;
 
     public event EventHandler<EngineEventArgs>? EngineEvent;
     public bool IsRunning => _process.IsRunning;
@@ -56,6 +58,77 @@ public sealed class DownloadEngine : IAsyncDisposable
         _tombstones = new TombstoneStore(Path.Combine(config.WorkDir, "tombstones.json"));
         _process = new Aria2Process(config, _tombstones, _log);
         _client = new Aria2RpcClient("127.0.0.1", config.RpcPort, config.RpcSecret);
+        // 用持久化元数据里的最大编号初始化：系统时钟回拨后重启也不会发出重复编号
+        _lastTaskNumber = _store.All().Select(m => m.TaskNumber).DefaultIfEmpty(0).Max();
+    }
+
+    /// <summary>生成任务唯一编号：取当前时间戳（yyyyMMddHHmmssfff），与时钟无关的并发/回拨用单调递增兜底。</summary>
+    private long NextTaskNumber()
+    {
+        long candidate, last;
+        do
+        {
+            last = Interlocked.Read(ref _lastTaskNumber);
+            var ts = long.Parse(DateTime.Now.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture));
+            candidate = ts > last ? ts : last + 1;
+        } while (Interlocked.CompareExchange(ref _lastTaskNumber, candidate, last) != last);
+        return candidate;
+    }
+
+    /// <summary>从 URL 猜测落盘文件名（取路径最后一段），猜不出返回 null。</summary>
+    private static string? GuessFileNameFromUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        if (url.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
+        var seg = uri.Segments.Length > 0 ? uri.Segments[^1] : string.Empty;
+        seg = Uri.UnescapeDataString(seg.TrimEnd('/'));
+        if (string.IsNullOrEmpty(seg)) return null;
+        if (seg.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return null;
+        return seg;
+    }
+
+    /// <summary>目录内文件名冲突时追加编号：name.ext → name (1).ext → name (2).ext …</summary>
+    private static string ResolveUniqueFileName(string dir, string fileName)
+    {
+        var target = Path.Combine(dir, fileName);
+        if (!File.Exists(target)) return fileName;
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        var ext = Path.GetExtension(fileName);
+        for (var i = 1; i < 1000; i++)
+        {
+            var candidate = $"{stem} ({i}){ext}";
+            if (!File.Exists(Path.Combine(dir, candidate))) return candidate;
+        }
+        return $"{stem} ({DateTime.Now:yyyyMMddHHmmssfff}){ext}";
+    }
+
+    /// <summary>普通（非磁力）任务落盘名冲突处理：目标文件已存在时自动改名并把 out 固定为新名，
+    /// 使相同链接可以重复下载而不覆盖旧文件。磁力/BT 任务不做改名（依赖 infohash 注册语义）。</summary>
+    private NewTaskRequest ApplyUniqueFileName(NewTaskRequest req)
+    {
+        if (req.Urls.Any(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase))) return req;
+        var dir = string.IsNullOrWhiteSpace(req.Directory) ? _config.DefaultDownloadDir : req.Directory;
+        if (string.IsNullOrEmpty(dir)) return req;
+        var baseName = !string.IsNullOrWhiteSpace(req.FileName)
+            ? req.FileName
+            : GuessFileNameFromUrl(req.Urls.FirstOrDefault());
+        if (string.IsNullOrWhiteSpace(baseName)) return req;
+        if (!File.Exists(Path.Combine(dir, baseName))) return req;
+        var unique = ResolveUniqueFileName(dir, baseName);
+        if (string.Equals(unique, req.FileName, StringComparison.Ordinal)) return req;
+        _log($"目标文件已存在，自动重命名: {baseName} → {unique}");
+        return new NewTaskRequest
+        {
+            Urls = req.Urls,
+            Directory = req.Directory,
+            FileName = unique,
+            Connections = req.Connections,
+            SpeedLimit = req.SpeedLimit,
+            Referer = req.Referer,
+            Headers = req.Headers,
+            ExtraOptions = req.ExtraOptions
+        };
     }
 
     public async Task StartAsync(CancellationToken ct = default)
@@ -155,6 +228,8 @@ public sealed class DownloadEngine : IAsyncDisposable
                         _store.AddMeta(fg, new TaskMeta
                         {
                             Gid = fg,
+                            // 真实下载任务继承元数据阶段的编号（同一逻辑任务）；元数据缺失时补发新编号
+                            TaskNumber = mMeta?.TaskNumber ?? NextTaskNumber(),
                             Name = mMeta?.Name ?? string.Empty,
                             Urls = mMeta?.Urls ?? new List<string>(),
                             IsBt = true,
@@ -244,6 +319,7 @@ public sealed class DownloadEngine : IAsyncDisposable
         var info = new DownloadTaskInfo
         {
             Gid = raw.Gid,
+            TaskNumber = meta?.TaskNumber ?? 0,
             Dir = raw.Dir,
             TotalLength = raw.TotalLength,
             CompletedLength = raw.CompletedLength,
@@ -322,6 +398,23 @@ public sealed class DownloadEngine : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// 检测与给定 URL 重复的"未结束"任务（下载中/排队/暂停/做种中）。
+    /// 已完成、失败、已移除的任务不算重复——用户可能已删除下载好的文件，重新添加应作为新任务开始。
+    /// </summary>
+    public async Task<List<DownloadTaskInfo>> FindActiveDuplicatesAsync(IEnumerable<string> urls, CancellationToken ct = default)
+    {
+        var targets = urls.Where(u => !string.IsNullOrWhiteSpace(u))
+            .Select(u => u.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (targets.Count == 0) return new List<DownloadTaskInfo>();
+        var all = await GetAllTasksAsync(ct).ConfigureAwait(false);
+        return all
+            .Where(t => t.State is not (TaskState.Completed or TaskState.Failed or TaskState.Removed))
+            .Where(t => t.Urls.Any(u => targets.Contains(u)))
+            .ToList();
+    }
+
     public async Task<DownloadTaskInfo> AddTaskAsync(NewTaskRequest req, CancellationToken ct = default)
     {
         var isMagnet = req.Urls.Any(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase));
@@ -339,14 +432,21 @@ public sealed class DownloadEngine : IAsyncDisposable
                 ExtraOptions = BuildBtSeedOptions()
             };
         }
+        else
+        {
+            // 相同文件已存在时自动重命名（追加编号），新任务不覆盖历史下载
+            req = ApplyUniqueFileName(req);
+        }
+        var taskNumber = NextTaskNumber();
         var gid = await _client.AddUriAsync(req, ct).ConfigureAwait(false);
-        _log($"addUri 成功 gid={gid} 磁力={isMagnet}");
+        _log($"addUri 成功 gid={gid} 编号={taskNumber} 磁力={isMagnet}");
         if (!isMagnet) _newTaskGids[gid] = 0; // 磁力首 gid 是元数据任务，不弹进度窗；真实任务由 followedBy 阶段标记
         // 显式重新添加视为撤销墓碑，保证之后可以正常恢复/续传
         _tombstones.Unmark(req.Urls, req.Directory ?? _config.DefaultDownloadDir);
         _store.AddMeta(gid, new TaskMeta
         {
             Gid = gid,
+            TaskNumber = taskNumber,
             Name = req.FileName ?? string.Empty,
             Urls = req.Urls,
             Referer = req.Referer,
@@ -355,7 +455,9 @@ public sealed class DownloadEngine : IAsyncDisposable
             AddedAt = DateTime.Now
         });
         var status = await _client.TellStatusAsync(gid, ct).ConfigureAwait(false);
-        return status != null ? ToTaskInfo(status) : new DownloadTaskInfo { Gid = gid, Name = req.FileName ?? req.Urls.First(), IsBt = isMagnet };
+        return status != null
+            ? ToTaskInfo(status)
+            : new DownloadTaskInfo { Gid = gid, TaskNumber = taskNumber, Name = req.FileName ?? req.Urls.First(), IsBt = isMagnet };
     }
 
     /// <summary>添加 .torrent 种子任务。</summary>
@@ -371,11 +473,13 @@ public sealed class DownloadEngine : IAsyncDisposable
             Referer = req.Referer,
             ExtraOptions = BuildBtSeedOptions()
         };
+        var taskNumber = NextTaskNumber();
         var gid = await _client.AddTorrentAsync(torrentData, req2, ct).ConfigureAwait(false);
         _newTaskGids[gid] = 0;
         _store.AddMeta(gid, new TaskMeta
         {
             Gid = gid,
+            TaskNumber = taskNumber,
             Name = req.FileName ?? string.Empty,
             Urls = req.Urls,
             Referer = req.Referer,
@@ -383,7 +487,9 @@ public sealed class DownloadEngine : IAsyncDisposable
             AddedAt = DateTime.Now
         });
         var status = await _client.TellStatusAsync(gid, ct).ConfigureAwait(false);
-        return status != null ? ToTaskInfo(status) : new DownloadTaskInfo { Gid = gid, Name = req.FileName ?? "(种子任务)", IsBt = true };
+        return status != null
+            ? ToTaskInfo(status)
+            : new DownloadTaskInfo { Gid = gid, TaskNumber = taskNumber, Name = req.FileName ?? "(种子任务)", IsBt = true };
     }
 
     /// <summary>构造 BT 做种选项（跟随当前设置；添加时生效，无需等引擎重启）。</summary>
@@ -413,6 +519,13 @@ public sealed class DownloadEngine : IAsyncDisposable
             var m = r.Urls.FirstOrDefault(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase));
             if (m != null) EnsureBtNotDuplicate(BtHashUtil.FromMagnet(m));
         }
+        // 每个任务一个时间戳唯一编号；同名文件已存在时自动重命名（磁力除外）
+        for (var i = 0; i < list.Count; i++)
+        {
+            if (!list[i].Urls.Any(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase)))
+                list[i] = ApplyUniqueFileName(list[i]);
+        }
+        var numbers = list.Select(_ => NextTaskNumber()).ToList();
         var gids = await _client.AddUriBatchAsync(list, ct).ConfigureAwait(false);
         var results = new List<DownloadTaskInfo>();
         for (var i = 0; i < gids.Count && i < list.Count; i++)
@@ -425,12 +538,13 @@ public sealed class DownloadEngine : IAsyncDisposable
             _store.AddMeta(gids[i], new TaskMeta
             {
                 Gid = gids[i],
+                TaskNumber = numbers[i],
                 Name = list[i].FileName ?? string.Empty,
                 Urls = list[i].Urls,
                 Referer = list[i].Referer,
                 AddedAt = DateTime.Now
             });
-            results.Add(new DownloadTaskInfo { Gid = gids[i], Name = list[i].FileName ?? list[i].Urls.First() });
+            results.Add(new DownloadTaskInfo { Gid = gids[i], TaskNumber = numbers[i], Name = list[i].FileName ?? list[i].Urls.First() });
         }
         return results;
     }

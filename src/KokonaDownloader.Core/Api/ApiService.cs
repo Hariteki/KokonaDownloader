@@ -32,6 +32,8 @@ public sealed class ApiDownloadRequest
 public sealed class ApiTaskDto
 {
     public string gid { get; set; } = string.Empty;
+    /// <summary>时间戳唯一编号（yyyyMMddHHmmssfff）。</summary>
+    public long taskNumber { get; set; }
     public string name { get; set; } = string.Empty;
     public string state { get; set; } = string.Empty;
     public long totalLength { get; set; }
@@ -47,6 +49,7 @@ public sealed class ApiTaskDto
     public static ApiTaskDto From(DownloadTaskInfo t) => new()
     {
         gid = t.Gid,
+        taskNumber = t.TaskNumber,
         name = t.Name,
         state = t.State.ToString().ToLowerInvariant(),
         totalLength = t.TotalLength,
@@ -105,10 +108,13 @@ public sealed class ApiService : IDisposable
 
     public int Port { get; }
     public bool IsListening => _listener.IsListening;
-    public string Version { get; } = "1.0.0";
+    public string Version { get; } = "1.0.4";
 
     /// <summary>收到单条磁力链接（浏览器扩展/系统协议转发）：UI 层订阅后弹独立确认窗口，由用户决定是否下载。</summary>
     public event Action<string>? MagnetConfirmRequested;
+
+    /// <summary>扩展送来的链接命中下载中/排队/暂停的重复任务（已自动跳过）：UI 层订阅后弹窗提醒用户。</summary>
+    public event Action<string>? DuplicateTaskNoticeRequested;
 
     public ApiService(DownloadEngine engine, SettingsStore settings, int port, Action<string>? log = null)
     {
@@ -264,14 +270,16 @@ public sealed class ApiService : IDisposable
             }
         }
 
-        // 以客户端任务列表为唯一事实源做重复检测：
-        // 任务列表里已有相同 URL 则不再重复添加；用户删除任务后自然允许重新下载
-        var existingUrls = (await _engine.GetAllTasksAsync().ConfigureAwait(false))
-            .SelectMany(t => t.Urls)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (urls.Any(existingUrls.Contains))
+        // 重复检测只针对"未结束"任务（下载中/排队/暂停/做种中），已完成/失败的历史任务不算重复；
+        // 命中时跳过添加，并通知 UI 层弹窗提醒用户该任务已在下载中
+        var dups = await _engine.FindActiveDuplicatesAsync(urls).ConfigureAwait(false);
+        if (dups.Count > 0)
         {
             _log($"API 跳过重复任务（客户端已存在）: {string.Join(", ", urls)}");
+            var names = string.Join("\n", dups.Select(t =>
+                "• " + (string.IsNullOrEmpty(t.Name) ? (t.Urls.FirstOrDefault() ?? t.Gid) : t.Name)));
+            try { DuplicateTaskNoticeRequested?.Invoke(names); }
+            catch (Exception ex) { _log($"API 重复任务提醒弹窗失败: {ex.Message}"); }
             await WriteJson(ctx, 200, new { ok = true, duplicate = true }).ConfigureAwait(false);
             return;
         }

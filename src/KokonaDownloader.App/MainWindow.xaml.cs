@@ -31,6 +31,42 @@ public partial class MainWindow : Window
     /// <summary>每个任务对应的进度小窗（IDM 式），任务结束后保留引用以便关闭。</summary>
     private readonly Dictionary<string, ProgressWindow> _progressWindows = new();
 
+    /// <summary>悬停投影只在首帧模板实例化后挂载一次。</summary>
+    private bool _shadowsAttached;
+
+    /// <summary>WinUI3 唯一可挂到 UIElement.Shadow 的具体类型是 ThemeShadow（合成层 DropShadow 不派生自它），
+    /// 共享一个实例挂到所有悬停投影宿主上，接收者为根 Grid。</summary>
+    private void OnRootLoaded(object sender, RoutedEventArgs e)
+    {
+        if (_shadowsAttached) return;
+        _shadowsAttached = true;
+        try
+        {
+            var shadow = new ThemeShadow();
+            shadow.Receivers.Add(RootGrid);
+            foreach (var host in FindShadowHosts(RootGrid))
+            {
+                host.Shadow = shadow;
+                // Translation 在本地自定义类型上无法经 XAML 属性解析（XBF Property Not Found），改在挂载时代码设置
+                host.Translation = new System.Numerics.Vector3(0, 0, 24);
+            }
+        }
+        catch (Exception ex) { App.Log($"挂载悬停投影失败: {ex.Message}"); }
+    }
+
+    private static IEnumerable<FrameworkElement> FindShadowHosts(DependencyObject root)
+    {
+        int count = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is FrameworkElement { Name: "TabShadowHost" or "BtShadowHost" })
+                yield return (FrameworkElement)child;
+            foreach (var nested in FindShadowHosts(child))
+                yield return nested;
+        }
+    }
+
     public MainWindow()
     {
         InitializeComponent();
@@ -38,6 +74,7 @@ public partial class MainWindow : Window
         // 此时 MatchesFilter 已保证集合中只有 BT 任务，无需维护第二份数据源
         TaskList.ItemsSource = _tasks;
         BtList.ItemsSource = _tasks;
+        RootGrid.Loaded += OnRootLoaded;
 
         // 沉浸式标题栏：无系统色带，标题文字融入内容区（与设置窗口同款样式）
         ExtendsContentIntoTitleBar = true;
@@ -74,6 +111,8 @@ public partial class MainWindow : Window
             App.Host.Engine.EngineEvent += OnEngineEvent;
             // 浏览器扩展经 /api/download 送来的单条磁力链接：弹独立确认窗口（不弹主窗口）
             App.Host.Api.MagnetConfirmRequested += OnApiMagnetConfirm;
+            // 扩展送来的链接命中下载中的重复任务：主窗口弹窗提醒（任务已被跳过）
+            App.Host.Api.DuplicateTaskNoticeRequested += OnApiDuplicateNotice;
         }
 
         // 单实例：监听"显示窗口"命名事件（第二个实例启动时触发）
@@ -733,6 +772,30 @@ public partial class MainWindow : Window
 
     /// <summary>浏览器扩展 /api/download 转发的磁力链接（监听线程触发，需切回 UI 线程）。</summary>
     private void OnApiMagnetConfirm(string url) => ShowMagnetConfirmWindow(url);
+
+    /// <summary>扩展送来的链接命中下载中的重复任务：主窗口弹窗提醒用户（任务已被自动跳过，不会重复添加）。</summary>
+    private void OnApiDuplicateNotice(string names)
+    {
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            try
+            {
+                var dlg = new ContentDialog
+                {
+                    Title = "任务已在下载中",
+                    Content = $"以下任务已在下载列表中，浏览器送来的链接已跳过：\n{names}",
+                    CloseButtonText = "知道了",
+                    DefaultButton = ContentDialogButton.Close,
+                    XamlRoot = RootGrid.XamlRoot
+                };
+                await dlg.ShowAsync();
+            }
+            catch (Exception ex)
+            {
+                App.Log($"[api] 重复任务提醒弹窗失败: {ex.Message}");
+            }
+        });
+    }
 
     /// <summary>弹出独立的磁力确认窗口（浏览器扩展 / 系统 magnet: 协议共用）。</summary>
     public void ShowMagnetConfirmWindow(string url)

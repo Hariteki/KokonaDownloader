@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "海兔下载器",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "description": "接管浏览器下载：自动捕获下载请求并交给海兔下载器桌面客户端（Aria2 引擎）多线程高速下载。",
   "permissions": [
     "downloads",

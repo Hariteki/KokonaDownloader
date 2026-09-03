@@ -5,13 +5,16 @@
     Title="新建下载"
     PrimaryButtonText="开始下载"
     SecondaryButtonText="取消"
+    PrimaryButtonStyle="{ThemeResource SquircleAccentButtonStyle}"
+    SecondaryButtonStyle="{ThemeResource SquircleButtonStyle}"
     DefaultButton="Primary"
     MinWidth="520">
 
     <StackPanel Spacing="14" Padding="0,8,0,0">
         <StackPanel Spacing="4">
             <TextBlock Text="下载地址（每行一个，支持批量；支持磁力链接）" FontSize="13"/>
-            <TextBox x:Name="UrlBox" AcceptsReturn="True" TextWrapping="Wrap" Height="96"
+            <TextBox x:Name="UrlBox" Style="{ThemeResource SquircleTextBoxStyle}"
+                     AcceptsReturn="True" TextWrapping="Wrap" Height="96"
                      PlaceholderText="https://example.com/file.zip&#x0a;magnet:?xt=urn:btih:…"/>
             <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                 <Button Content="选择 .torrent 文件…" Click="OnBrowseTorrent"/>
@@ -32,14 +35,14 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBox x:Name="DirBox" Grid.Column="0"/>
+                <TextBox x:Name="DirBox" Grid.Column="0" Style="{ThemeResource SquircleTextBoxStyle}"/>
                 <Button Grid.Column="1" Click="OnBrowseDir" Content="浏览…"/>
             </Grid>
         </StackPanel>
 
         <StackPanel x:Name="FileNamePanel" Spacing="4">
             <TextBlock Text="文件名（留空则自动识别）" FontSize="13"/>
-            <TextBox x:Name="FileNameBox" PlaceholderText="自动"/>
+            <TextBox x:Name="FileNameBox" Style="{ThemeResource SquircleTextBoxStyle}" PlaceholderText="自动"/>
         </StackPanel>
 
         <Grid ColumnSpacing="16" x:Name="OptionsGrid">

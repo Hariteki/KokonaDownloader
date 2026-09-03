@@ -2,7 +2,8 @@
     x:Class="KokonaDownloader.App.BtPieceGrid"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:KokonaDownloader.App">
+    xmlns:local="using:KokonaDownloader.App"
+    xmlns:controls="using:KokonaDownloader.App.Controls">
     <UserControl.Resources>
         <local:PieceStateToBrushConverter x:Key="PieceBrushConverter"/>
     </UserControl.Resources>
@@ -16,8 +17,9 @@
             </ItemsRepeater.Layout>
             <ItemsRepeater.ItemTemplate>
                 <DataTemplate x:DataType="local:PieceVm">
-                    <Border Width="{x:Bind Side, Mode=OneWay}" Height="{x:Bind Side, Mode=OneWay}" CornerRadius="2"
-                            Background="{x:Bind State, Mode=OneWay, Converter={StaticResource PieceBrushConverter}}"/>
+                    <controls:SquircleBorder Width="{x:Bind Side, Mode=OneWay}" Height="{x:Bind Side, Mode=OneWay}"
+                                             CornerRadius="3"
+                                             Fill="{x:Bind State, Mode=OneWay, Converter={StaticResource PieceBrushConverter}}"/>
                 </DataTemplate>
             </ItemsRepeater.ItemTemplate>
         </ItemsRepeater>

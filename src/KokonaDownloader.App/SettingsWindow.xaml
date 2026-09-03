@@ -2,6 +2,7 @@
     x:Class="KokonaDownloader.App.SettingsWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:KokonaDownloader.App.Controls"
     xmlns:themes="using:KokonaDownloader.App.Themes"
     Title="设置">
 
@@ -35,7 +36,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox x:Name="DirBox" Grid.Column="0"/>
+                        <TextBox x:Name="DirBox" Grid.Column="0" Style="{StaticResource SquircleTextBoxStyle}"/>
                         <Button Grid.Column="1" Click="OnBrowseDir" Content="浏览…"/>
                     </Grid>
                 </StackPanel>
@@ -63,6 +64,7 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBox x:Name="GlobalLimitBox" Grid.Column="0" MaxLength="6"
+                                 Style="{StaticResource SquircleTextBoxStyle}"
                                  PlaceholderText="留空则不限速"
                                  BeforeTextChanging="OnLimitBeforeTextChanging"/>
                         <TextBlock Grid.Column="1" Text="MB/s" VerticalAlignment="Center" FontSize="13"
@@ -82,10 +84,10 @@
                     <TextBlock Text="用于让浏览器扩展接管网页下载，扩展需要凭下方地址和密钥连接本软件。"
                                FontSize="12" TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                    <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                            CornerRadius="8" Padding="12">
-                        <StackPanel Spacing="10">
+                    <controls:SquircleBorder Fill="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            Stroke="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                            CornerRadius="12">
+                        <StackPanel Spacing="10" Padding="12">
                             <Grid ColumnSpacing="10">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -115,7 +117,7 @@
                                        FontSize="11" TextWrapping="Wrap"
                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                         </StackPanel>
-                    </Border>
+                    </controls:SquircleBorder>
                 </StackPanel>
 
                 <TextBlock x:Name="ErrorText" Foreground="{ThemeResource SystemFillColorCriticalBrush}" FontSize="12"
@@ -129,7 +131,7 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <Button Content="取消" Click="OnCancelClick" MinWidth="104"/>
-            <Button Grid.Column="1" Content="保存" Style="{ThemeResource AccentButtonStyle}"
+            <Button Grid.Column="1" Content="保存" Style="{ThemeResource SquircleAccentButtonStyle}"
                     Click="OnSaveClick" MinWidth="104"/>
         </Grid>
     </Grid>

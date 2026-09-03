@@ -7,6 +7,8 @@ namespace KokonaDownloader.Core.Engine;
 public sealed class TaskMeta
 {
     public string Gid { get; set; } = string.Empty;
+    /// <summary>时间戳唯一编号（见 DownloadTaskInfo.TaskNumber），随元数据持久化，重启后按 Gid 恢复关联。</summary>
+    public long TaskNumber { get; set; }
     public string Name { get; set; } = string.Empty;
     public List<string> Urls { get; set; } = new();
     public string? Referer { get; set; }

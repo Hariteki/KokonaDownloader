@@ -127,6 +127,23 @@ public partial class NewDownloadDialog : ContentDialog
             var magnets = urls.Where(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase)).ToList();
             var normal = urls.Except(magnets).ToList();
 
+            // 重复预检：相同链接仍在下载中/排队/暂停时弹窗提醒并跳过，不重复添加；
+            // 已完成/失败的历史任务不算重复（用户可能已删除文件，需要再次下载）
+            if (normal.Count > 0)
+            {
+                var dups = await _host.Engine.FindActiveDuplicatesAsync(normal);
+                if (dups.Count > 0)
+                {
+                    var dupUrls = dups.SelectMany(t => t.Urls)
+                        .Where(u => !string.IsNullOrWhiteSpace(u))
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    normal = normal.Where(u => !dupUrls.Contains(u)).ToList();
+                    await ShowDuplicateNoticeAsync(
+                        $"以下 {dups.Count} 个任务已在下载列表中，无需重复添加：\n{string.Join("\n", dups.Select(FormatTaskLine))}");
+                    if (normal.Count == 0 && magnets.Count == 0) return;
+                }
+            }
+
             // 磁力链接逐个走 AddTaskAsync（引擎内做 BT 参数特判），不与普通 URL 混批
             foreach (var m in magnets)
             {
@@ -165,13 +182,33 @@ public partial class NewDownloadDialog : ContentDialog
         catch (KokonaDownloader.Core.Engine.DuplicateTaskException dex)
         {
             App.Log($"[dialog] 重复任务被拦截: {dex.Message}");
-            ShowError(dex.Message);
+            await ShowDuplicateNoticeAsync(dex.Message);
         }
         catch (Exception ex)
         {
             App.Log($"[dialog] OnPrimary 异常: {ex.Message}");
             ShowError($"添加失败: {ex.Message}");
         }
+    }
+
+    /// <summary>重复任务提醒弹窗：盖在新建下载对话框之上，仅告知不重复添加。</summary>
+    private async Task ShowDuplicateNoticeAsync(string message)
+    {
+        var dlg = new ContentDialog
+        {
+            Title = "任务已在下载中",
+            Content = message,
+            CloseButtonText = "知道了",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot
+        };
+        await dlg.ShowAsync();
+    }
+
+    private static string FormatTaskLine(DownloadTaskInfo t)
+    {
+        var name = !string.IsNullOrEmpty(t.Name) ? t.Name : (t.Urls.FirstOrDefault() ?? t.Gid);
+        return $"• {Truncate(name, 60)}（{(t.State == TaskState.Paused ? "已暂停" : t.State == TaskState.Seeding ? "做种中" : "下载中")}）";
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";

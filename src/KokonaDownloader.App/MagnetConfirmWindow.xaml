@@ -2,6 +2,7 @@
     x:Class="KokonaDownloader.App.MagnetConfirmWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:KokonaDownloader.App.Controls"
     Title="磁力链接下载确认">
 
     <Grid x:Name="Root" RequestedTheme="Dark"
@@ -23,14 +24,15 @@
         </StackPanel>
 
         <!-- 链接与目录信息卡片（与设置窗口的卡片样式一致） -->
-        <Border Grid.Row="1" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
-                CornerRadius="8" Padding="14">
-            <StackPanel Spacing="10">
+        <controls:SquircleBorder Grid.Row="1" Fill="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                Stroke="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                CornerRadius="12">
+            <StackPanel Spacing="10" Padding="14">
                 <StackPanel Spacing="4">
                     <TextBlock Text="磁力链接" FontSize="12" FontWeight="SemiBold"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                     <TextBox x:Name="UrlBox" IsReadOnly="True" IsSpellCheckEnabled="False"
+                             Style="{StaticResource SquircleTextBoxStyle}"
                              FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"
                              Height="88" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
                 </StackPanel>
@@ -41,7 +43,7 @@
                                Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
                 </StackPanel>
             </StackPanel>
-        </Border>
+        </controls:SquircleBorder>
 
         <TextBlock Grid.Row="2" x:Name="ErrorText" FontSize="12" TextWrapping="Wrap"
                    VerticalAlignment="Bottom" Visibility="Collapsed"
@@ -54,7 +56,7 @@
             </Grid.ColumnDefinitions>
             <Button x:Name="CancelBtn" Content="取消" MinWidth="104" Click="OnCancelClick"/>
             <Button x:Name="StartBtn" Grid.Column="1" Content="开始下载" MinWidth="104"
-                    Style="{ThemeResource AccentButtonStyle}" Click="OnConfirmClick"/>
+                    Style="{ThemeResource SquircleAccentButtonStyle}" Click="OnConfirmClick"/>
         </Grid>
 
         <Grid.KeyboardAccelerators>

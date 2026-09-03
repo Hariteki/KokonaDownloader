@@ -5,6 +5,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:converters="using:KokonaDownloader.App.Converters"
+    xmlns:controls="using:KokonaDownloader.App.Controls"
     xmlns:local="using:KokonaDownloader.App"
     mc:Ignorable="d"
     Title="海兔下载器">
@@ -12,7 +13,10 @@
     <Grid x:Name="RootGrid" Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
         <Grid.Resources>
             <converters:BoolToVisibilityConverter x:Key="BoolToVis"/>
-            <!-- Metro 风格 Tab：纯文字大标题，无圆点无下划线，选中时主题色+加粗 -->
+            <!-- Metro 风格 Tab：纯文字大标题，无圆点无下划线，选中时主题色+加粗。
+                 选中/未选中各一层文字，前景直接引用 ThemeResource 实时颜色，切换只动画透明度（交叉淡入淡出）；
+                 不用 ColorAnimation 动画主题色，避免它锁存旧主题颜色快照、切换主题后不立即刷新。
+                 悬停时轻微放大并浮现投影制造悬浮感，移开后平滑缩回原大小；按压缩放反馈保持不变。 -->
             <Style x:Key="FilterTabStyle" TargetType="RadioButton">
                 <Setter Property="MinWidth" Value="0"/>
                 <Setter Property="MinHeight" Value="0"/>
@@ -23,22 +27,66 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="RadioButton">
-                            <Grid x:Name="TabRoot" Background="Transparent">
-                                <ContentPresenter x:Name="TabContent" Content="{TemplateBinding Content}"
+                            <Grid x:Name="TabRoot" Background="Transparent" RenderTransformOrigin="0.5,0.5">
+                                <Grid.RenderTransform>
+                                    <ScaleTransform/>
+                                </Grid.RenderTransform>
+                                <!-- 悬停投影宿主：WinUI3 无 XAML DropShadow 类型，用 ThemeShadow（代码挂载）+ Z 抬升制造悬浮投影，
+                                     底色用表面色保证投影有实心轮廓，Opacity 动画整体淡入淡出 -->
+                                <controls:SquircleBorder x:Name="TabShadowHost" CornerRadius="9" Opacity="0" IsHitTestVisible="False">
+                                    <controls:SquircleBorder.Fill>
+                                        <SolidColorBrush Color="{ThemeResource TabSurfaceColor}"/>
+                                    </controls:SquircleBorder.Fill>
+                                </controls:SquircleBorder>
+                                <controls:SquircleBorder x:Name="TabHover" CornerRadius="9" IsHitTestVisible="False">
+                                    <controls:SquircleBorder.Fill>
+                                        <SolidColorBrush x:Name="TabHoverBrush" Color="Transparent"/>
+                                    </controls:SquircleBorder.Fill>
+                                </controls:SquircleBorder>
+                                <ContentPresenter x:Name="TabInactive" Content="{TemplateBinding Content}"
                                                   Padding="{TemplateBinding Padding}"
                                                   HorizontalAlignment="Center" VerticalAlignment="Center">
                                     <ContentPresenter.Foreground>
-                                        <SolidColorBrush x:Name="TabBrush" Color="{ThemeResource TabInactiveColor}"/>
+                                        <SolidColorBrush Color="{ThemeResource TabInactiveColor}"/>
                                     </ContentPresenter.Foreground>
                                 </ContentPresenter>
-                                <Border x:Name="TabHover" CornerRadius="6" IsHitTestVisible="False">
-                                    <Border.Background>
-                                        <SolidColorBrush x:Name="TabHoverBrush" Color="Transparent"/>
-                                    </Border.Background>
-                                </Border>
+                                <ContentPresenter x:Name="TabActive" Content="{TemplateBinding Content}" Opacity="0"
+                                                  Padding="{TemplateBinding Padding}"
+                                                  HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <ContentPresenter.Foreground>
+                                        <SolidColorBrush Color="{ThemeResource TabAccentColor}"/>
+                                    </ContentPresenter.Foreground>
+                                </ContentPresenter>
                                 <VisualStateManager.VisualStateGroups>
                                     <VisualStateGroup x:Name="CommonStates">
-                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="Normal">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="TabHoverBrush" Storyboard.TargetProperty="Color"
+                                                                To="Transparent" Duration="0:0:0.2">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="TabRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                 From="1.05" To="1" Duration="0:0:0.18">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="TabRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                 From="1.05" To="1" Duration="0:0:0.18">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="TabShadowHost" Storyboard.TargetProperty="Opacity"
+                                                                 From="1" To="0" Duration="0:0:0.18">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                            </Storyboard>
+                                        </VisualState>
                                         <VisualState x:Name="PointerOver">
                                             <Storyboard>
                                                 <ColorAnimation Storyboard.TargetName="TabHoverBrush" Storyboard.TargetProperty="Color"
@@ -47,38 +95,82 @@
                                                         <CubicEase EasingMode="EaseOut"/>
                                                     </ColorAnimation.EasingFunction>
                                                 </ColorAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="TabRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                 From="1" To="1.05" Duration="0:0:0.18">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="TabRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                 From="1" To="1.05" Duration="0:0:0.18">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="TabShadowHost" Storyboard.TargetProperty="Opacity"
+                                                                 From="0" To="1" Duration="0:0:0.18">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
                                             </Storyboard>
                                         </VisualState>
                                         <VisualState x:Name="Pressed">
                                             <Storyboard>
                                                 <ColorAnimation Storyboard.TargetName="TabHoverBrush" Storyboard.TargetProperty="Color"
-                                                                To="#33000000" Duration="0:0:0.08">
+                                                                To="#33000000" Duration="0:0:0.1">
                                                     <ColorAnimation.EasingFunction>
                                                         <CubicEase EasingMode="EaseOut"/>
                                                     </ColorAnimation.EasingFunction>
                                                 </ColorAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="TabRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                 To="0.96" Duration="0:0:0.12">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="TabRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                 To="0.96" Duration="0:0:0.12">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="TabShadowHost" Storyboard.TargetProperty="Opacity"
+                                                                 From="1" To="1" Duration="0:0:0.12"/>
                                             </Storyboard>
                                         </VisualState>
                                     </VisualStateGroup>
                                     <VisualStateGroup x:Name="CheckStates">
                                         <VisualState x:Name="Checked">
                                             <Storyboard>
-                                                <ColorAnimation Storyboard.TargetName="TabBrush" Storyboard.TargetProperty="Color"
-                                                                To="{ThemeResource TabAccentColor}" Duration="0:0:0.18">
-                                                    <ColorAnimation.EasingFunction>
+                                                <DoubleAnimation Storyboard.TargetName="TabActive" Storyboard.TargetProperty="Opacity"
+                                                                 From="0" To="1" Duration="0:0:0.26">
+                                                    <DoubleAnimation.EasingFunction>
                                                         <CubicEase EasingMode="EaseOut"/>
-                                                    </ColorAnimation.EasingFunction>
-                                                </ColorAnimation>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="TabInactive" Storyboard.TargetProperty="Opacity"
+                                                                 From="1" To="0" Duration="0:0:0.16">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseIn"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
                                             </Storyboard>
                                         </VisualState>
                                         <VisualState x:Name="Unchecked">
                                             <Storyboard>
-                                                <ColorAnimation Storyboard.TargetName="TabBrush" Storyboard.TargetProperty="Color"
-                                                                To="{ThemeResource TabInactiveColor}" Duration="0:0:0.15">
-                                                    <ColorAnimation.EasingFunction>
+                                                <DoubleAnimation Storyboard.TargetName="TabInactive" Storyboard.TargetProperty="Opacity"
+                                                                 From="0" To="1" Duration="0:0:0.26">
+                                                    <DoubleAnimation.EasingFunction>
                                                         <CubicEase EasingMode="EaseOut"/>
-                                                    </ColorAnimation.EasingFunction>
-                                                </ColorAnimation>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="TabActive" Storyboard.TargetProperty="Opacity"
+                                                                 From="1" To="0" Duration="0:0:0.16">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseIn"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
                                             </Storyboard>
                                         </VisualState>
                                     </VisualStateGroup>
@@ -88,7 +180,10 @@
                     </Setter.Value>
                 </Setter>
             </Style>
-            <!-- BT 右上角独立按钮：磁力图标 + 文字胶囊，选中态同 Tab 高亮色 -->
+            <!-- BT 右上角独立按钮：磁力图标 + 文字胶囊，选中态同 Tab 高亮色。
+                 与 FilterTabStyle 同理：主题相关颜色全部走 ThemeResource 实时引用（表面层 + 主题色叠加层 + 前景双层），
+                 选中/未选中只动画透明度，不用 ColorAnimation 锁存主题色；
+                 悬停同样轻微放大 + 投影悬浮，移开缩回淡出；按压反馈保持不变。 -->
             <Style x:Key="BtToggleButtonStyle" TargetType="RadioButton">
                 <Setter Property="MinWidth" Value="0"/>
                 <Setter Property="MinHeight" Value="0"/>
@@ -99,32 +194,80 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="RadioButton">
-                            <Border x:Name="BtRoot" CornerRadius="6">
-                                <Border.Background>
-                                    <SolidColorBrush x:Name="BtFillBrush" Color="{ThemeResource TabSurfaceColor}"/>
-                                </Border.Background>
-                                <Grid>
-                                    <Border x:Name="BtHover" CornerRadius="6" IsHitTestVisible="False">
-                                        <Border.Background>
-                                            <SolidColorBrush x:Name="BtHoverBrush" Color="Transparent"/>
-                                        </Border.Background>
-                                    </Border>
-                                    <StackPanel Orientation="Horizontal" Spacing="6" Padding="{TemplateBinding Padding}">
-                                        <FontIcon Glyph="&#xE896;" FontSize="14">
+                            <Grid x:Name="BtRoot" Background="Transparent" RenderTransformOrigin="0.5,0.5">
+                                <Grid.RenderTransform>
+                                    <ScaleTransform/>
+                                </Grid.RenderTransform>
+                                <controls:SquircleBorder x:Name="BtShadowHost" CornerRadius="9" Opacity="0" IsHitTestVisible="False">
+                                    <controls:SquircleBorder.Fill>
+                                        <SolidColorBrush Color="{ThemeResource TabSurfaceColor}"/>
+                                    </controls:SquircleBorder.Fill>
+                                </controls:SquircleBorder>
+                                <controls:SquircleBorder CornerRadius="9">
+                                    <controls:SquircleBorder.Fill>
+                                        <SolidColorBrush Color="{ThemeResource TabSurfaceColor}"/>
+                                    </controls:SquircleBorder.Fill>
+                                    <controls:SquircleBorder x:Name="BtAccent" CornerRadius="9" Opacity="0">
+                                        <controls:SquircleBorder.Fill>
+                                            <SolidColorBrush Color="{ThemeResource TabAccentColor}"/>
+                                        </controls:SquircleBorder.Fill>
+                                    </controls:SquircleBorder>
+                                </controls:SquircleBorder>
+                                <controls:SquircleBorder x:Name="BtHover" CornerRadius="9" IsHitTestVisible="False">
+                                    <controls:SquircleBorder.Fill>
+                                        <SolidColorBrush x:Name="BtHoverBrush" Color="Transparent"/>
+                                    </controls:SquircleBorder.Fill>
+                                </controls:SquircleBorder>
+                                <StackPanel Orientation="Horizontal" Spacing="6" Padding="{TemplateBinding Padding}"
+                                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <Grid VerticalAlignment="Center">
+                                        <FontIcon x:Name="BtIconIdle" Glyph="&#xE896;" FontSize="14">
                                             <FontIcon.Foreground>
-                                                <SolidColorBrush x:Name="BtIconBrush" Color="{ThemeResource TabInactiveColor}"/>
+                                                <SolidColorBrush Color="{ThemeResource TabInactiveColor}"/>
                                             </FontIcon.Foreground>
                                         </FontIcon>
-                                        <ContentPresenter Content="{TemplateBinding Content}">
+                                        <FontIcon x:Name="BtIconActive" Glyph="&#xE896;" FontSize="14" Opacity="0" Foreground="White"/>
+                                    </Grid>
+                                    <Grid VerticalAlignment="Center">
+                                        <ContentPresenter x:Name="BtTextIdle" Content="{TemplateBinding Content}">
                                             <ContentPresenter.Foreground>
-                                                <SolidColorBrush x:Name="BtTextBrush" Color="{ThemeResource TabInactiveColor}"/>
+                                                <SolidColorBrush Color="{ThemeResource TabInactiveColor}"/>
                                             </ContentPresenter.Foreground>
                                         </ContentPresenter>
-                                    </StackPanel>
-                                </Grid>
+                                        <ContentPresenter x:Name="BtTextActive" Content="{TemplateBinding Content}"
+                                                          Opacity="0" Foreground="White"/>
+                                    </Grid>
+                                </StackPanel>
                                 <VisualStateManager.VisualStateGroups>
                                     <VisualStateGroup x:Name="CommonStates">
-                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="Normal">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="BtHoverBrush" Storyboard.TargetProperty="Color"
+                                                                To="Transparent" Duration="0:0:0.2">
+                                                    <ColorAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </ColorAnimation.EasingFunction>
+                                                </ColorAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                 From="1.05" To="1" Duration="0:0:0.18">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                 From="1.05" To="1" Duration="0:0:0.18">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtShadowHost" Storyboard.TargetProperty="Opacity"
+                                                                 From="1" To="0" Duration="0:0:0.18">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                            </Storyboard>
+                                        </VisualState>
                                         <VisualState x:Name="PointerOver">
                                             <Storyboard>
                                                 <ColorAnimation Storyboard.TargetName="BtHoverBrush" Storyboard.TargetProperty="Color"
@@ -133,67 +276,123 @@
                                                         <CubicEase EasingMode="EaseOut"/>
                                                     </ColorAnimation.EasingFunction>
                                                 </ColorAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                 From="1" To="1.05" Duration="0:0:0.18">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                 From="1" To="1.05" Duration="0:0:0.18">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtShadowHost" Storyboard.TargetProperty="Opacity"
+                                                                 From="0" To="1" Duration="0:0:0.18">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
                                             </Storyboard>
                                         </VisualState>
                                         <VisualState x:Name="Pressed">
                                             <Storyboard>
                                                 <ColorAnimation Storyboard.TargetName="BtHoverBrush" Storyboard.TargetProperty="Color"
-                                                                To="#33000000" Duration="0:0:0.08">
+                                                                To="#33000000" Duration="0:0:0.1">
                                                     <ColorAnimation.EasingFunction>
                                                         <CubicEase EasingMode="EaseOut"/>
                                                     </ColorAnimation.EasingFunction>
                                                 </ColorAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                                                 To="0.96" Duration="0:0:0.12">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtRoot" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                                                 To="0.96" Duration="0:0:0.12">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseOut"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtShadowHost" Storyboard.TargetProperty="Opacity"
+                                                                 From="1" To="1" Duration="0:0:0.12"/>
                                             </Storyboard>
                                         </VisualState>
                                     </VisualStateGroup>
                                     <VisualStateGroup x:Name="CheckStates">
                                         <VisualState x:Name="Checked">
                                             <Storyboard>
-                                                <ColorAnimation Storyboard.TargetName="BtFillBrush" Storyboard.TargetProperty="Color"
-                                                                To="{ThemeResource TabAccentColor}" Duration="0:0:0.18">
-                                                    <ColorAnimation.EasingFunction>
+                                                <DoubleAnimation Storyboard.TargetName="BtAccent" Storyboard.TargetProperty="Opacity"
+                                                                 From="0" To="1" Duration="0:0:0.26">
+                                                    <DoubleAnimation.EasingFunction>
                                                         <CubicEase EasingMode="EaseOut"/>
-                                                    </ColorAnimation.EasingFunction>
-                                                </ColorAnimation>
-                                                <ColorAnimation Storyboard.TargetName="BtIconBrush" Storyboard.TargetProperty="Color"
-                                                                To="White" Duration="0:0:0.18">
-                                                    <ColorAnimation.EasingFunction>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtIconActive" Storyboard.TargetProperty="Opacity"
+                                                                 From="0" To="1" Duration="0:0:0.22">
+                                                    <DoubleAnimation.EasingFunction>
                                                         <CubicEase EasingMode="EaseOut"/>
-                                                    </ColorAnimation.EasingFunction>
-                                                </ColorAnimation>
-                                                <ColorAnimation Storyboard.TargetName="BtTextBrush" Storyboard.TargetProperty="Color"
-                                                                To="White" Duration="0:0:0.18">
-                                                    <ColorAnimation.EasingFunction>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtTextActive" Storyboard.TargetProperty="Opacity"
+                                                                 From="0" To="1" Duration="0:0:0.22">
+                                                    <DoubleAnimation.EasingFunction>
                                                         <CubicEase EasingMode="EaseOut"/>
-                                                    </ColorAnimation.EasingFunction>
-                                                </ColorAnimation>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtIconIdle" Storyboard.TargetProperty="Opacity"
+                                                                 From="1" To="0" Duration="0:0:0.16">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseIn"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtTextIdle" Storyboard.TargetProperty="Opacity"
+                                                                 From="1" To="0" Duration="0:0:0.16">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseIn"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
                                             </Storyboard>
                                         </VisualState>
                                         <VisualState x:Name="Unchecked">
                                             <Storyboard>
-                                                <ColorAnimation Storyboard.TargetName="BtFillBrush" Storyboard.TargetProperty="Color"
-                                                                To="{ThemeResource TabSurfaceColor}" Duration="0:0:0.15">
-                                                    <ColorAnimation.EasingFunction>
+                                                <DoubleAnimation Storyboard.TargetName="BtIconIdle" Storyboard.TargetProperty="Opacity"
+                                                                 From="0" To="1" Duration="0:0:0.26">
+                                                    <DoubleAnimation.EasingFunction>
                                                         <CubicEase EasingMode="EaseOut"/>
-                                                    </ColorAnimation.EasingFunction>
-                                                </ColorAnimation>
-                                                <ColorAnimation Storyboard.TargetName="BtIconBrush" Storyboard.TargetProperty="Color"
-                                                                To="{ThemeResource TabInactiveColor}" Duration="0:0:0.15">
-                                                    <ColorAnimation.EasingFunction>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtTextIdle" Storyboard.TargetProperty="Opacity"
+                                                                 From="0" To="1" Duration="0:0:0.26">
+                                                    <DoubleAnimation.EasingFunction>
                                                         <CubicEase EasingMode="EaseOut"/>
-                                                    </ColorAnimation.EasingFunction>
-                                                </ColorAnimation>
-                                                <ColorAnimation Storyboard.TargetName="BtTextBrush" Storyboard.TargetProperty="Color"
-                                                                To="{ThemeResource TabInactiveColor}" Duration="0:0:0.15">
-                                                    <ColorAnimation.EasingFunction>
-                                                        <CubicEase EasingMode="EaseOut"/>
-                                                    </ColorAnimation.EasingFunction>
-                                                </ColorAnimation>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtAccent" Storyboard.TargetProperty="Opacity"
+                                                                 From="1" To="0" Duration="0:0:0.2">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseIn"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtIconActive" Storyboard.TargetProperty="Opacity"
+                                                                 From="1" To="0" Duration="0:0:0.16">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseIn"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
+                                                <DoubleAnimation Storyboard.TargetName="BtTextActive" Storyboard.TargetProperty="Opacity"
+                                                                 From="1" To="0" Duration="0:0:0.16">
+                                                    <DoubleAnimation.EasingFunction>
+                                                        <CubicEase EasingMode="EaseIn"/>
+                                                    </DoubleAnimation.EasingFunction>
+                                                </DoubleAnimation>
                                             </Storyboard>
                                         </VisualState>
                                     </VisualStateGroup>
                                 </VisualStateManager.VisualStateGroups>
-                            </Border>
+                            </Grid>
                         </ControlTemplate>
                     </Setter.Value>
                 </Setter>
@@ -202,7 +401,7 @@
                 <Setter Property="Background" Value="{ThemeResource SystemFillColorCriticalBrush}"/>
                 <Setter Property="Foreground" Value="White"/>
                 <Setter Property="BorderThickness" Value="0"/>
-                <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}"/>
+                <Setter Property="CornerRadius" Value="8"/>
                 <Setter Property="Padding" Value="{ThemeResource ButtonPadding}"/>
                 <Setter Property="MinHeight" Value="32"/>
                 <Setter Property="FontFamily" Value="{ThemeResource ContentControlThemeFontFamily}"/>
@@ -210,115 +409,166 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Button">
-                            <ContentPresenter x:Name="ContentPresenter"
-                                              Background="{TemplateBinding Background}"
-                                              Foreground="{TemplateBinding Foreground}"
-                                              BorderBrush="{TemplateBinding BorderBrush}"
-                                              BorderThickness="{TemplateBinding BorderThickness}"
-                                              CornerRadius="{TemplateBinding CornerRadius}"
-                                              Padding="{TemplateBinding Padding}"
-                                              HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
-                                              Content="{TemplateBinding Content}"
-                                              ContentTemplate="{TemplateBinding ContentTemplate}"
-                                              ContentTransitions="{TemplateBinding ContentTransitions}">
-                                <VisualStateManager.VisualStateGroups>
-                                    <VisualStateGroup x:Name="CommonStates">
-                                        <VisualState x:Name="Normal"/>
-                                        <VisualState x:Name="PointerOver">
-                                            <Storyboard>
-                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Background">
-                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AppDangerFillHoverBrush}"/>
-                                                </ObjectAnimationUsingKeyFrames>
-                                            </Storyboard>
-                                        </VisualState>
-                                        <VisualState x:Name="Pressed">
-                                            <Storyboard>
-                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Background">
-                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AppDangerFillPressedBrush}"/>
-                                                </ObjectAnimationUsingKeyFrames>
-                                            </Storyboard>
-                                        </VisualState>
-                                        <VisualState x:Name="Disabled">
-                                            <Storyboard>
-                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Opacity">
-                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="0.55"/>
-                                                </ObjectAnimationUsingKeyFrames>
-                                            </Storyboard>
-                                        </VisualState>
-                                    </VisualStateGroup>
-                                </VisualStateManager.VisualStateGroups>
-                            </ContentPresenter>
+                            <Grid x:Name="RootHost" Background="Transparent">
+                                <controls:SquircleBorder x:Name="Root"
+                                                         Fill="{TemplateBinding Background}"
+                                                         BorderThickness="{TemplateBinding BorderThickness}"
+                                                         CornerRadius="{TemplateBinding CornerRadius}"/>
+                                <ContentPresenter x:Name="ContentPresenter"
+                                                  Foreground="{TemplateBinding Foreground}"
+                                                  Padding="{TemplateBinding Padding}"
+                                                  HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                  Content="{TemplateBinding Content}"
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                  ContentTransitions="{TemplateBinding ContentTransitions}"
+                                                  Background="Transparent">
+                                    <VisualStateManager.VisualStateGroups>
+                                        <VisualStateGroup x:Name="CommonStates">
+                                            <VisualState x:Name="Normal"/>
+                                            <VisualState x:Name="PointerOver">
+                                                <Storyboard>
+                                                    <ObjectAnimationUsingKeyFrames Storyboard.TargetName="Root" Storyboard.TargetProperty="Fill">
+                                                        <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AppDangerFillHoverBrush}"/>
+                                                    </ObjectAnimationUsingKeyFrames>
+                                                </Storyboard>
+                                            </VisualState>
+                                            <VisualState x:Name="Pressed">
+                                                <Storyboard>
+                                                    <ObjectAnimationUsingKeyFrames Storyboard.TargetName="Root" Storyboard.TargetProperty="Fill">
+                                                        <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource AppDangerFillPressedBrush}"/>
+                                                    </ObjectAnimationUsingKeyFrames>
+                                                </Storyboard>
+                                            </VisualState>
+                                            <VisualState x:Name="Disabled">
+                                                <Storyboard>
+                                                    <ObjectAnimationUsingKeyFrames Storyboard.TargetName="RootHost" Storyboard.TargetProperty="Opacity">
+                                                        <DiscreteObjectKeyFrame KeyTime="0" Value="0.55"/>
+                                                    </ObjectAnimationUsingKeyFrames>
+                                                </Storyboard>
+                                            </VisualState>
+                                        </VisualStateGroup>
+                                    </VisualStateManager.VisualStateGroups>
+                                </ContentPresenter>
+                            </Grid>
                         </ControlTemplate>
                     </Setter.Value>
                 </Setter>
             </Style>
-            <!-- 圆角卡片修复：本 SDK 默认模板中 presenter 的 CornerRadius 绑定的是
-                 主题资源键而非控件属性，样式里直接设 CornerRadius 不生效。此模板
-                 逐字复制自 generic.xaml 的 DefaultListViewItemStyle，唯一差异是
-                 CornerRadius 改为 TemplateBinding，由 Setter 提供圆角；
-                 Margin 让相邻卡片留出间距、右侧与列表左 Padding 对齐。
+            <!-- 连续曲率卡片：默认模板的 ListViewItemPresenter 只能画标准圆弧角，
+                 这里整体重写为自绘模板——底层 SquircleBorder 卡片面（实心卡背景+描边），
+                 上层 SquircleBorder 状态着色层（ListViewItemBackground* 本身是半透明叠加色，
+                 逐状态换 Fill 即可复刻悬停/按下/选中的系统反馈），选中指示条用 Rectangle。
+                 大圆角半径 12，Margin 让相邻卡片留出间距、右侧与列表左 Padding 对齐。
                  主列表与 BT 专用页共用 -->
             <Style x:Key="CardItemStyle" TargetType="ListViewItem">
                 <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                 <Setter Property="MinHeight" Value="76"/>
                 <Setter Property="Padding" Value="4,2"/>
                 <Setter Property="Margin" Value="0,3,12,3"/>
-                <Setter Property="CornerRadius" Value="8"/>
+                <Setter Property="CornerRadius" Value="12"/>
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="ListViewItem">
-                            <ListViewItemPresenter x:Name="Root"
-                                ContentTransitions="{TemplateBinding ContentTransitions}"
-                                Control.IsTemplateFocusTarget="True"
-                                FocusVisualMargin="{TemplateBinding FocusVisualMargin}"
-                                FocusVisualPrimaryBrush="{TemplateBinding FocusVisualPrimaryBrush}"
-                                FocusVisualPrimaryThickness="{TemplateBinding FocusVisualPrimaryThickness}"
-                                FocusVisualSecondaryBrush="{TemplateBinding FocusVisualSecondaryBrush}"
-                                FocusVisualSecondaryThickness="{TemplateBinding FocusVisualSecondaryThickness}"
-                                SelectionCheckMarkVisualEnabled="{ThemeResource ListViewItemSelectionCheckMarkVisualEnabled}"
-                                CheckBrush="{ThemeResource ListViewItemCheckBrush}"
-                                CheckBoxBrush="{ThemeResource ListViewItemCheckBoxBrush}"
-                                DragBackground="{ThemeResource ListViewItemDragBackground}"
-                                DragForeground="{ThemeResource ListViewItemDragForeground}"
-                                FocusBorderBrush="{ThemeResource ListViewItemFocusBorderBrush}"
-                                FocusSecondaryBorderBrush="{ThemeResource ListViewItemFocusSecondaryBorderBrush}"
-                                PlaceholderBackground="{ThemeResource ListViewItemPlaceholderBackground}"
-                                PointerOverBackground="{ThemeResource ListViewItemBackgroundPointerOver}"
-                                PointerOverForeground="{ThemeResource ListViewItemForegroundPointerOver}"
-                                SelectedBackground="{ThemeResource ListViewItemBackgroundSelected}"
-                                SelectedForeground="{ThemeResource ListViewItemForegroundSelected}"
-                                SelectedPointerOverBackground="{ThemeResource ListViewItemBackgroundSelectedPointerOver}"
-                                PressedBackground="{ThemeResource ListViewItemBackgroundPressed}"
-                                SelectedPressedBackground="{ThemeResource ListViewItemBackgroundSelectedPressed}"
-                                DisabledOpacity="{ThemeResource ListViewItemDisabledThemeOpacity}"
-                                DragOpacity="{ThemeResource ListViewItemDragThemeOpacity}"
-                                ReorderHintOffset="{ThemeResource ListViewItemReorderHintThemeOffset}"
-                                HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
-                                ContentMargin="{TemplateBinding Padding}"
-                                CheckMode="{ThemeResource ListViewItemCheckMode}"
-                                CornerRadius="{TemplateBinding CornerRadius}"
-                                CheckPressedBrush="{ThemeResource ListViewItemCheckPressedBrush}"
-                                CheckDisabledBrush="{ThemeResource ListViewItemCheckDisabledBrush}"
-                                CheckBoxPointerOverBrush="{ThemeResource ListViewItemCheckBoxPointerOverBrush}"
-                                CheckBoxPressedBrush="{ThemeResource ListViewItemCheckBoxPressedBrush}"
-                                CheckBoxSelectedBrush="{ThemeResource ListViewItemCheckBoxSelectedBrush}"
-                                CheckBoxSelectedPointerOverBrush="{ThemeResource ListViewItemCheckBoxSelectedPointerOverBrush}"
-                                CheckBoxSelectedPressedBrush="{ThemeResource ListViewItemCheckBoxSelectedPressedBrush}"
-                                CheckBoxSelectedDisabledBrush="{ThemeResource ListViewItemCheckBoxSelectedDisabledBrush}"
-                                CheckBoxBorderBrush="{ThemeResource ListViewItemCheckBoxBorderBrush}"
-                                CheckBoxPointerOverBorderBrush="{ThemeResource ListViewItemCheckBoxPointerOverBorderBrush}"
-                                CheckBoxPressedBorderBrush="{ThemeResource ListViewItemCheckBoxPressedBorderBrush}"
-                                CheckBoxDisabledBorderBrush="{ThemeResource ListViewItemCheckBoxDisabledBorderBrush}"
-                                CheckBoxCornerRadius="{ThemeResource ListViewItemCheckBoxCornerRadius}"
-                                SelectionIndicatorCornerRadius="{ThemeResource ListViewItemSelectionIndicatorCornerRadius}"
-                                SelectionIndicatorVisualEnabled="{ThemeResource ListViewItemSelectionIndicatorVisualEnabled}"
-                                SelectionIndicatorBrush="{ThemeResource ListViewItemSelectionIndicatorBrush}"
-                                SelectionIndicatorPointerOverBrush="{ThemeResource ListViewItemSelectionIndicatorPressedBrush}"
-                                SelectionIndicatorPressedBrush="{ThemeResource ListViewItemSelectionIndicatorPressedBrush}"
-                                SelectionIndicatorDisabledBrush="{ThemeResource ListViewItemSelectionIndicatorDisabledBrush}"
-                                SelectedDisabledBackground="{ThemeResource ListViewItemBackgroundSelectedDisabled}" />
+                            <Grid Background="Transparent" Control.IsTemplateFocusTarget="True"
+                                  FocusVisualMargin="{TemplateBinding FocusVisualMargin}"
+                                  FocusVisualPrimaryBrush="{TemplateBinding FocusVisualPrimaryBrush}"
+                                  FocusVisualPrimaryThickness="{TemplateBinding FocusVisualPrimaryThickness}"
+                                  FocusVisualSecondaryBrush="{TemplateBinding FocusVisualSecondaryBrush}"
+                                  FocusVisualSecondaryThickness="{TemplateBinding FocusVisualSecondaryThickness}">
+                                <controls:SquircleBorder x:Name="CardSurface"
+                                                         CornerRadius="{TemplateBinding CornerRadius}"
+                                                         Fill="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                                         Stroke="{ThemeResource CardStrokeColorDefaultBrush}"
+                                                         BorderThickness="1"/>
+                                <controls:SquircleBorder x:Name="CardTint"
+                                                         CornerRadius="{TemplateBinding CornerRadius}"
+                                                         Fill="Transparent" IsHitTestVisible="False"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Rectangle x:Name="SelectionIndicator" Width="3" Height="16" RadiusX="1.5" RadiusY="1.5"
+                                               Margin="3,0,0,0" VerticalAlignment="Center" Opacity="0"
+                                               Fill="{ThemeResource AccentFillColorDefaultBrush}"/>
+                                    <ContentPresenter Grid.Column="1" Content="{TemplateBinding Content}"
+                                                      ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                      ContentTransitions="{TemplateBinding ContentTransitions}"
+                                                      Margin="{TemplateBinding Padding}"
+                                                      HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                      VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                      Foreground="{TemplateBinding Foreground}"/>
+                                </Grid>
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="PointerOver">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="CardTint" Storyboard.TargetProperty="Fill">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ListViewItemBackgroundPointerOver}"/>
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="CardTint" Storyboard.TargetProperty="Fill">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ListViewItemBackgroundPressed}"/>
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Disabled">
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetName="CardSurface" Storyboard.TargetProperty="Opacity"
+                                                                 To="{ThemeResource ListViewItemDisabledThemeOpacity}" Duration="0"/>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                    <VisualStateGroup x:Name="SelectionStates">
+                                        <VisualState x:Name="Unselected"/>
+                                        <VisualState x:Name="Selected">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="CardTint" Storyboard.TargetProperty="Fill">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ListViewItemBackgroundSelected}"/>
+                                                </ObjectAnimationUsingKeyFrames>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="SelectionIndicator" Storyboard.TargetProperty="Opacity">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="1"/>
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="SelectedPointerOver">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="CardTint" Storyboard.TargetProperty="Fill">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ListViewItemBackgroundSelectedPointerOver}"/>
+                                                </ObjectAnimationUsingKeyFrames>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="SelectionIndicator" Storyboard.TargetProperty="Opacity">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="1"/>
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="SelectedPressed">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="CardTint" Storyboard.TargetProperty="Fill">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ListViewItemBackgroundSelectedPressed}"/>
+                                                </ObjectAnimationUsingKeyFrames>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="SelectionIndicator" Storyboard.TargetProperty="Opacity">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="1"/>
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="SelectedDisabled">
+                                            <Storyboard>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="CardTint" Storyboard.TargetProperty="Fill">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="{ThemeResource ListViewItemBackgroundSelectedDisabled}"/>
+                                                </ObjectAnimationUsingKeyFrames>
+                                                <ObjectAnimationUsingKeyFrames Storyboard.TargetName="SelectionIndicator" Storyboard.TargetProperty="Opacity">
+                                                    <DiscreteObjectKeyFrame KeyTime="0" Value="1"/>
+                                                </ObjectAnimationUsingKeyFrames>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+                            </Grid>
                         </ControlTemplate>
                     </Setter.Value>
                 </Setter>
@@ -352,7 +602,7 @@
             </Grid.ColumnDefinitions>
 
             <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
-                <Button x:Name="BtnNew" Click="OnNewClick" Style="{ThemeResource AccentButtonStyle}">
+                <Button x:Name="BtnNew" Click="OnNewClick" Style="{ThemeResource SquircleAccentButtonStyle}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE710;" FontSize="14"/>
                         <TextBlock Text="新建下载"/>
@@ -440,7 +690,7 @@
                              ToolTipService.ToolTip="磁力链接 / 种子文件" AutomationProperties.Name="BT 任务视图"/>
                 <AutoSuggestBox x:Name="SearchBox" PlaceholderText="搜索"
                                 QueryIcon="Find" Width="200" MinWidth="120" VerticalAlignment="Center"
-                                TextChanged="OnSearchTextChanged"/>
+                                CornerRadius="8" TextChanged="OnSearchTextChanged"/>
             </StackPanel>
         </Grid>
 
@@ -475,18 +725,18 @@
                         <TextBlock Grid.Column="2" Text="{Binding EtaText}" VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
 
                         <StackPanel Grid.Column="3" VerticalAlignment="Center" Spacing="3">
-                            <StackPanel Orientation="Horizontal" Spacing="4">
-                                <Button Padding="6" Click="OnItemPauseClick" Visibility="{Binding PauseVisible, Converter={StaticResource BoolToVis}}" ToolTipService.ToolTip="暂停">
-                                    <FontIcon Glyph="&#xE769;" FontSize="13"/>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemPauseClick" Visibility="{Binding PauseVisible, Converter={StaticResource BoolToVis}}" ToolTipService.ToolTip="暂停">
+                                    <FontIcon Glyph="&#xE769;" FontSize="15"/>
                                 </Button>
-                                <Button Padding="6" Click="OnItemResumeClick" Visibility="{Binding ResumeVisible, Converter={StaticResource BoolToVis}}" ToolTipService.ToolTip="继续">
-                                    <FontIcon Glyph="&#xE768;" FontSize="13"/>
+                                <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemResumeClick" Visibility="{Binding ResumeVisible, Converter={StaticResource BoolToVis}}" ToolTipService.ToolTip="继续">
+                                    <FontIcon Glyph="&#xE768;" FontSize="15"/>
                                 </Button>
-                                <Button Padding="6" Click="OnItemOpenClick" ToolTipService.ToolTip="打开文件夹">
-                                    <FontIcon Glyph="&#xE8DA;" FontSize="13"/>
+                                <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemOpenClick" ToolTipService.ToolTip="打开文件夹">
+                                    <FontIcon Glyph="&#xE8DA;" FontSize="15"/>
                                 </Button>
-                                <Button Padding="6" Click="OnItemDeleteClick" ToolTipService.ToolTip="删除">
-                                    <FontIcon Glyph="&#xE74D;" FontSize="13"/>
+                                <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemDeleteClick" ToolTipService.ToolTip="删除">
+                                    <FontIcon Glyph="&#xE74D;" FontSize="15"/>
                                 </Button>
                             </StackPanel>
                             <!-- 过渡小字：点击暂停/继续后立即出现（图标同步乐观切换），引擎确认后消失；
@@ -498,7 +748,7 @@
 
                         <!-- 常规任务：进度条；BT 任务：Motrix 式分片方块矩阵（紧凑单行，最多 100 块） -->
                         <ProgressBar Grid.Row="1" Grid.ColumnSpan="4" Value="{Binding Progress}" Minimum="0" Maximum="100"
-                                     HorizontalAlignment="Stretch" CornerRadius="9" Margin="0,8,0,0"
+                                     HorizontalAlignment="Stretch" Margin="0,8,0,0"
                                      Visibility="{Binding IsBt, Converter={StaticResource BoolToVis}, ConverterParameter=invert}"/>
                         <local:BtPieceGrid Grid.Row="1" Grid.ColumnSpan="4" Margin="0,8,0,0"
                                            Compact="True" MetaVisible="False"
@@ -522,10 +772,10 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <Border Grid.Row="0" Margin="16,4,16,10" Padding="12,8" CornerRadius="8"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-                <StackPanel Orientation="Horizontal" Spacing="16">
+            <controls:SquircleBorder Grid.Row="0" Margin="16,4,16,10" CornerRadius="12"
+                    Fill="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    Stroke="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                <StackPanel Orientation="Horizontal" Spacing="16" Padding="12,8">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE896;" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                         <TextBlock x:Name="BtSummaryText" Text="暂无 BT 任务" FontSize="12"
@@ -537,7 +787,7 @@
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                     </StackPanel>
                 </StackPanel>
-            </Border>
+            </controls:SquircleBorder>
 
             <ListView x:Name="BtList" Grid.Row="1" Padding="12,0"
                       SelectionMode="Extended" IsItemClickEnabled="False"
@@ -562,18 +812,18 @@
                                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" FontSize="14"/>
                                     <TextBlock Text="{Binding StatusText}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                                 </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                                    <Button Padding="6" Click="OnItemPauseClick" Visibility="{Binding PauseVisible, Converter={StaticResource BoolToVis}}" ToolTipService.ToolTip="暂停">
-                                        <FontIcon Glyph="&#xE769;" FontSize="13"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                    <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemPauseClick" Visibility="{Binding PauseVisible, Converter={StaticResource BoolToVis}}" ToolTipService.ToolTip="暂停">
+                                        <FontIcon Glyph="&#xE769;" FontSize="15"/>
                                     </Button>
-                                    <Button Padding="6" Click="OnItemResumeClick" Visibility="{Binding ResumeVisible, Converter={StaticResource BoolToVis}}" ToolTipService.ToolTip="继续">
-                                        <FontIcon Glyph="&#xE768;" FontSize="13"/>
+                                    <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemResumeClick" Visibility="{Binding ResumeVisible, Converter={StaticResource BoolToVis}}" ToolTipService.ToolTip="继续">
+                                        <FontIcon Glyph="&#xE768;" FontSize="15"/>
                                     </Button>
-                                    <Button Padding="6" Click="OnItemOpenClick" ToolTipService.ToolTip="打开文件夹">
-                                        <FontIcon Glyph="&#xE8DA;" FontSize="13"/>
+                                    <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemOpenClick" ToolTipService.ToolTip="打开文件夹">
+                                        <FontIcon Glyph="&#xE8DA;" FontSize="15"/>
                                     </Button>
-                                    <Button Padding="6" Click="OnItemDeleteClick" ToolTipService.ToolTip="删除">
-                                        <FontIcon Glyph="&#xE74D;" FontSize="13"/>
+                                    <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemDeleteClick" ToolTipService.ToolTip="删除">
+                                        <FontIcon Glyph="&#xE74D;" FontSize="15"/>
                                     </Button>
                                 </StackPanel>
                             </Grid>

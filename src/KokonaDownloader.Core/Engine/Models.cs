@@ -19,6 +19,10 @@ public enum TaskState
 public sealed class DownloadTaskInfo
 {
     public string Gid { get; set; } = string.Empty;
+    /// <summary>时间戳唯一编号（yyyyMMddHHmmssfff，时钟回拨时单调递增）。
+    /// 每个新建任务分配一个新编号：即使 URL 与历史已完成任务完全相同也是不同任务，
+    /// 重复检测只针对未结束任务，已完成任务不再阻塞相同链接的重新下载。</summary>
+    public long TaskNumber { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? Dir { get; set; }
     public string? FilePath { get; set; }
