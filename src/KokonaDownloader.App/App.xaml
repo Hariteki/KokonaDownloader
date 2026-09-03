@@ -249,7 +249,10 @@
             </Style>
 
             <!-- 全局加粗进度条：轨道与填充均为 18px 连续曲率胶囊；
-                 填充用 AccentFillColorDefaultBrush，随主题色实时刷新 -->
+                 填充用 AccentFillColorDefaultBrush，随主题色实时刷新。
+                 填充宽度不依赖框架对 PART_Indicator 的内置测宽（对 SquircleBorder 失效，
+                 会导致进度条恒为空白），WinUI 3 又无 MultiBinding，
+                 改由 SquircleFillWidth 附加属性按 Value/Maximum×轨道宽自驱 -->
             <Style TargetType="ProgressBar">
                 <Setter Property="Foreground" Value="{ThemeResource AccentFillColorDefaultBrush}"/>
                 <Setter Property="Background" Value="{ThemeResource ControlFillColorTertiaryBrush}"/>
@@ -261,9 +264,12 @@
                             <Grid x:Name="Root" Height="18">
                                 <controls:SquircleBorder x:Name="PART_Track" Height="18" CornerRadius="9"
                                                          Fill="{TemplateBinding Background}"/>
-                                <controls:SquircleBorder x:Name="PART_Indicator" Height="18" CornerRadius="9"
+                                <controls:SquircleBorder x:Name="ProgressFill" Height="18" CornerRadius="9"
                                                          HorizontalAlignment="Left"
-                                                         Fill="{TemplateBinding Foreground}"/>
+                                                         Fill="{TemplateBinding Foreground}"
+                                                         controls:SquircleFillWidth.Value="{Binding Value, RelativeSource={RelativeSource TemplatedParent}}"
+                                                         controls:SquircleFillWidth.Maximum="{Binding Maximum, RelativeSource={RelativeSource TemplatedParent}}"
+                                                         controls:SquircleFillWidth.Track="{Binding ElementName=Root}"/>
                             </Grid>
                         </ControlTemplate>
                     </Setter.Value>
