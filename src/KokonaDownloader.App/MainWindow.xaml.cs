@@ -74,6 +74,8 @@ public partial class MainWindow : Window
         // 此时 MatchesFilter 已保证集合中只有 BT 任务，无需维护第二份数据源
         TaskList.ItemsSource = _tasks;
         BtList.ItemsSource = _tasks;
+        HookSelectionVisuals(TaskList);
+        HookSelectionVisuals(BtList);
         RootGrid.Loaded += OnRootLoaded;
 
         // 沉浸式标题栏：无系统色带，标题文字融入内容区（与设置窗口同款样式）
@@ -101,6 +103,7 @@ public partial class MainWindow : Window
         ApplyTheme();
         // 主题服务：资源覆盖 + 原生标题栏着色（内部已订阅设置变更与系统强调色变化）
         ThemeService.Register(this);
+        ThemeService.ThemeChanged += OnThemeChangedRefreshSelectionVisuals;
         // 窗口激活后再应用一次，确保标题栏颜色在首帧之后生效
         Activated += (_, _) => ApplyTheme();
         BuildThemeMenu();
@@ -131,6 +134,7 @@ public partial class MainWindow : Window
             _timer.Stop();
             _showEventWait?.Unregister(null);
             _showEvent?.Dispose();
+            ThemeService.ThemeChanged -= OnThemeChangedRefreshSelectionVisuals;
             ThemeService.Unregister(this);
             if (App.Host != null)
             {
@@ -392,6 +396,9 @@ public partial class MainWindow : Window
                 ActiveCountText.Text = $"活动 {stat.NumActive} · 等待 {stat.NumWaiting}";
                 ConnStatusText.Text = "引擎运行中";
                 MergeTasks(tasks);
+                // 兜底：定时刷新时重刷可见容器的选中视觉，覆盖虚拟化回收再实例化
+                ApplySelectionVisuals(TaskList);
+                ApplySelectionVisuals(BtList);
             });
         }
         catch (Exception ex)
@@ -569,6 +576,8 @@ public partial class MainWindow : Window
     {
         // 双击的是操作按钮（暂停/继续/打开/删除）时不触发打开文件夹
         if (IsWithinButton(e.OriginalSource as DependencyObject)) return;
+        // 双击打开文件夹时取消"再击取消选择"的待执行动作，避免误清选中
+        _pendingToggle = null;
         if ((sender as FrameworkElement)?.DataContext is TaskItemViewModel vm)
             OpenFolder(vm.Model);
     }
@@ -618,6 +627,131 @@ public partial class MainWindow : Window
     }
 
     private void OnClearSelectionClick(object sender, RoutedEventArgs e) => ActiveList.SelectedItems.Clear();
+
+    #region 再击取消选择
+
+    // Extended 模式下普通单击已选中项不会取消选择（需 Ctrl+单击，不可发现）。
+    // 这里在"单击后选择结果与单击前完全一致"时，延迟 300ms 取消该单选，
+    // 延迟窗口内若发生双击（打开文件夹）则撤销本次取消。
+    private HashSet<object>? _preClickSelection;
+    private (ListView list, object item)? _pendingToggle;
+    private DispatcherTimer? _toggleTimer;
+
+    private void OnListPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is not ListView list) return;
+        var point = e.GetCurrentPoint(list);
+        // 只记录左键按下时的选中快照；右键菜单、按钮点击（事件被 Button 拦截）不记录
+        _preClickSelection = point.Properties.IsLeftButtonPressed
+            ? new HashSet<object>(list.SelectedItems)
+            : null;
+    }
+
+    private void OnListTapped(object sender, TappedRoutedEventArgs e)
+    {
+        if (sender is not ListView list) return;
+        var pre = _preClickSelection;
+        _preClickSelection = null;
+        if (pre is null || pre.Count != 1) return;
+        if (e.OriginalSource is not DependencyObject src) return;
+        var item = ItemFromSource(src);
+        if (item is null || !pre.Contains(item)) return;
+        // Ctrl/Shift 组合点击会改变选择结果，走不进这个分支；只有"点击后选择纹丝不动"才切换
+        if (list.SelectedItems.Count == 1 && list.SelectedItems.Contains(item))
+        {
+            _pendingToggle = (list, item);
+            _toggleTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+            _toggleTimer.Stop();
+            _toggleTimer.Tick -= OnToggleTimerTick;
+            _toggleTimer.Tick += OnToggleTimerTick;
+            _toggleTimer.Start();
+        }
+    }
+
+    private void OnToggleTimerTick(object? sender, object e)
+    {
+        _toggleTimer?.Stop();
+        if (_pendingToggle is not { } pending) return;
+        _pendingToggle = null;
+        var (list, item) = pending;
+        if (list.SelectedItems.Count == 1 && list.SelectedItems.Contains(item))
+            list.SelectedItems.Remove(item);
+    }
+
+    private static object? ItemFromSource(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is ListViewItem lvi) return lvi.Content;
+            source = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(source);
+        }
+        return null;
+    }
+
+    #endregion
+
+    #region 代码驱动选中高亮
+
+    // WinUI 的 VisualState Storyboard 对属性的 hold 值在批量取消选择（SelectedItems.Clear）时
+    // 不保证被停止，导致高亮残留、且本地值无法覆盖动画值。因此选中着色层与指示条不走 VSM，
+    // 由本 region 在 SelectionChanged / 容器生成（含回收再实例化）时直接设置属性。
+
+    private static readonly SolidColorBrush SelectionOffBrush = new(Microsoft.UI.Colors.Transparent);
+
+    private void HookSelectionVisuals(ListView list)
+    {
+        list.SelectionChanged += (_, _) => ApplySelectionVisuals(list);
+        // WinUI3 的 ItemContainerGenerator 没有 ContainersChanged 事件，
+        // 用 ListViewBase.ContainerContentChanging 覆盖容器生成/回收再绑定
+        list.ContainerContentChanging += (_, _) =>
+            list.DispatcherQueue.TryEnqueue(() => ApplySelectionVisuals(list));
+    }
+
+    /// <summary>主题切换后覆盖字典重建，选中刷子需重新求值再刷一遍。</summary>
+    private void OnThemeChangedRefreshSelectionVisuals()
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            ApplySelectionVisuals(TaskList);
+            ApplySelectionVisuals(BtList);
+        });
+    }
+
+    private void ApplySelectionVisuals(ListView list)
+    {
+        var onBrush = Application.Current.Resources["ListViewItemBackgroundSelected"] as Brush
+                      ?? SelectionOffBrush;
+        for (int i = 0; i < list.Items.Count; i++)
+        {
+            if (list.ContainerFromIndex(i) is not ListViewItem container) continue;
+            ApplyCardSelection(container, list.SelectedItems.Contains(list.Items[i]), onBrush);
+        }
+    }
+
+    private static void ApplyCardSelection(ListViewItem container, bool selected, Brush onBrush)
+    {
+        if (FindTemplatePart(container, "CardSelectTint") is Controls.SquircleBorder tint)
+            tint.Fill = selected ? onBrush : SelectionOffBrush;
+        if (FindTemplatePart(container, "SelectionIndicator") is Microsoft.UI.Xaml.Shapes.Rectangle indicator)
+            indicator.Opacity = selected ? 1 : 0;
+    }
+
+    private static DependencyObject? FindTemplatePart(DependencyObject root, string name)
+    {
+        int count = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            // 不进入内容呈现子树，避免误命中数据模板内的同名元素
+            if (child is ContentPresenter) continue;
+            if (child is FrameworkElement fe && fe.Name == name) return child;
+            var found = FindTemplatePart(child, name);
+            if (found is not null) return found;
+        }
+        return null;
+    }
+
+    #endregion
 
     private async void OnBatchPauseClick(object sender, RoutedEventArgs e)
     {
