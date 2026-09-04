@@ -25,12 +25,6 @@
     .hint { color: #6b6b6b; font-size: 12px; margin-top: 4px; }
     .row { display: flex; gap: 12px; }
     .row > div { flex: 1; }
-    .switch-row {
-      display: flex; align-items: center; justify-content: space-between;
-      margin-top: 18px; padding: 12px; border-radius: 8px; background: rgba(128,128,128,.06);
-    }
-    .switch-row .t { font-weight: 600; font-size: 13px; }
-    .switch-row .d { font-size: 12px; color: #767676; margin-top: 2px; }
     button {
       padding: 8px 16px; border: 1px solid #c8c8c8; border-radius: 6px;
       font-size: 14px; cursor: pointer; background: #f5f5f5;
@@ -41,25 +35,12 @@
     .result { margin-top: 14px; font-size: 13px; min-height: 18px; }
     .result.ok { color: #2E9E5B; }
     .result.err { color: #C42B1C; }
-    .toggle { position: relative; width: 44px; height: 22px; flex: none; }
-    .toggle input { opacity: 0; width: 0; height: 0; }
-    .toggle .track {
-      position: absolute; inset: 0; border-radius: 11px; background: #8a8a8a;
-      transition: background .15s; cursor: pointer;
-    }
-    .toggle .track::after {
-      content: ""; position: absolute; width: 14px; height: 14px; border-radius: 50%;
-      background: #fff; top: 4px; left: 4px; transition: left .15s;
-    }
-    .toggle input:checked + .track { background: #60CDFF; }
-    .toggle input:checked + .track::after { left: 26px; }
     @media (prefers-color-scheme: dark) {
       body { background: #1a1a1a; color: #eee; }
       .card { background: #262626; border-color: #3a3a3a; }
       input, select { background: #2d2d2d; color: #eee; border-color: #444; }
       .hint { color: #9a9a9a; }
       .sub { color: #9a9a9a; }
-      .switch-row .d { color: #9a9a9a; }
       button { background: #2d2d2d; color: #eee; border-color: #444; }
     }
   </style>
@@ -80,16 +61,7 @@
       </div>
     </div>
 
-    <div class="switch-row">
-      <div>
-        <div class="t">自动接管浏览器下载</div>
-        <div class="d">开启后，浏览器中的下载会自动转给客户端；关闭则仅右键菜单手动发送。</div>
-      </div>
-      <label class="toggle">
-        <input type="checkbox" id="autoCapture" />
-        <span class="track"></span>
-      </label>
-    </div>
+    <div class="hint" style="margin-top:14px">「自动接管浏览器下载」开关已移至扩展主菜单（点击工具栏图标即可看到）。</div>
 
     <div class="btns">
       <button id="saveBtn" class="primary">保存</button>

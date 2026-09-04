@@ -44,6 +44,24 @@
     }
     .connected-row { text-align: right; margin-top: 4px; }
     .hint { color: #767676; font-size: 11px; margin-top: 8px; }
+    .switch-row {
+      display: flex; align-items: center; justify-content: space-between;
+      margin: 10px 0; padding: 10px 12px; border-radius: 8px; background: rgba(128,128,128,.08);
+    }
+    .switch-row .t { font-weight: 600; font-size: 13px; }
+    .switch-row .d { font-size: 11px; color: #767676; margin-top: 2px; }
+    .toggle { position: relative; width: 40px; height: 20px; flex: none; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle .track {
+      position: absolute; inset: 0; border-radius: 10px; background: #8a8a8a;
+      transition: background .15s; cursor: pointer;
+    }
+    .toggle .track::after {
+      content: ""; position: absolute; width: 14px; height: 14px; border-radius: 50%;
+      background: #fff; top: 3px; left: 3px; transition: left .15s;
+    }
+    .toggle input:checked + .track { background: #60CDFF; }
+    .toggle input:checked + .track::after { left: 23px; }
     .hidden { display: none; }
     .msg { margin-top: 8px; font-size: 12px; min-height: 16px; }
     .msg.ok { color: #2E9E5B; }
@@ -58,6 +76,7 @@
       button.primary { background: #60CDFF; border-color: #60CDFF; color: #003147; }
       .mini { color: #60CDFF; }
       .sub, .hint { color: #9a9a9a; }
+      .switch-row .d { color: #9a9a9a; }
       a { color: #60CDFF; }
     }
   </style>
@@ -71,6 +90,17 @@
   <div class="status">
     <div class="t" id="statusText">正在检测…</div>
     <div class="sub" id="statusDetail"></div>
+  </div>
+
+  <div class="switch-row">
+    <div>
+      <div class="t">自动接管浏览器下载</div>
+      <div class="d">开启后浏览器下载自动转给客户端</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="autoCapture" />
+      <span class="track"></span>
+    </label>
   </div>
 
   <div id="setupSection">

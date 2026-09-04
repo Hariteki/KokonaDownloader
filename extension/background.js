@@ -11,8 +11,16 @@ importScripts('logic.js');
 
 const SETTINGS_KEY = 'kokona_settings';
 const PING_ALARM = 'kokona-ping';
-/** 扩展启动时刻：作为"仅捕获新发起下载"的启动防火墙，早于此刻的下载项一律视为历史回放。 */
-const extStartMs = Date.now();
+/**
+ * 启动防火墙基准（会话级）：早于基准时刻创建的下载项一律视为历史回放，不予捕获。
+ * 基准存放在 chrome.storage.session（内存级存储，随浏览器退出自动清空、跨
+ * Service Worker 挂起/唤醒持久保留）。此前基准取自 SW 脚本求值时刻，而 MV3 的 SW
+ * 空闲约 30 秒即被回收：冷唤醒时下载项总是先被创建（startTime=T1）、其 onCreated
+ * 事件再把 SW 拉起（T2>T1），T1<T2 导致开机后的第一个下载被误判为回放而漏接管。
+ */
+const FW_KEY = 'kokona_fw_base_ms';
+/** 基准回退余量：覆盖"下载先创建、事件后到达 SW"的固有先后差与低端机冷启动延迟。 */
+const FW_GRACE_MS = 5000;
 
 /** 内存缓存（service worker 可能随时被回收，持久数据一律走 storage）。 */
 let cachedSettings = null;
@@ -33,6 +41,29 @@ async function saveSettings(raw) {
   cachedSettings = normalized;
   await chrome.storage.local.set({ [SETTINGS_KEY]: normalized });
   return normalized;
+}
+
+// ---------- 启动防火墙基准（会话级） ----------
+
+function firewallStamp() {
+  return Date.now() - FW_GRACE_MS;
+}
+
+/** 浏览器启动 / 扩展安装更新时写入本会话基准（storage.session 内存级，随浏览器退出清空）。 */
+async function primeFirewallBase() {
+  try { await chrome.storage.session.set({ [FW_KEY]: firewallStamp() }); } catch (e) { /* 忽略 */ }
+}
+
+/** 读取会话基准；本会话首次到达时补写（含余量），保证 SW 冷唤醒后的第一个下载不被误杀。 */
+async function getFirewallBase() {
+  const fallback = firewallStamp();
+  try {
+    const data = await chrome.storage.session.get(FW_KEY);
+    const base = data[FW_KEY];
+    if (typeof base === 'number' && isFinite(base)) return base;
+    await chrome.storage.session.set({ [FW_KEY]: fallback });
+  } catch (e) { /* storage.session 不可用时退回本次求值时刻减余量 */ }
+  return fallback;
 }
 
 // ---------- HTTP ----------
@@ -220,7 +251,8 @@ async function handleDownloadCreated(item) {
   forwardingNow.add(key);
   try {
     const s = await loadSettings();
-    if (!KokonaLogic.shouldCapture(item, s, extStartMs)) return;
+    const fwBase = await getFirewallBase();
+    if (!KokonaLogic.shouldCapture(item, s, fwBase)) return;
 
     const payload = KokonaLogic.buildDownloadPayload(item, s);
     try {
@@ -290,6 +322,7 @@ async function manualSend(url, referrer) {
 
 chrome.runtime.onInstalled.addListener(async () => {
   clearLegacyForwarded();
+  await primeFirewallBase();
   await setupContextMenus();
   await chrome.alarms.create(PING_ALARM, { periodInMinutes: 1 });
   await refreshStatus();
@@ -297,6 +330,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onStartup.addListener(async () => {
   clearLegacyForwarded();
+  await primeFirewallBase();
   await setupContextMenus();
   await refreshStatus();
 });
@@ -368,7 +402,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       }
       case 'save-settings': {
-        // 选项页只提交地址/端口/开关，密钥保留（在弹窗中管理）
+        // 选项页/弹窗只提交各自页面的字段，与现有设置合并保存（密钥仅在弹窗管理）
         const cur = await loadSettings();
         const saved2 = await saveSettings(Object.assign({}, cur, msg.settings || {}));
         const st2 = await refreshStatus();

@@ -1,10 +1,9 @@
-/* 设置页脚本：读写客户端地址与自动接管开关（连接密钥在工具栏弹窗中粘贴设置）。 */
+/* 设置页脚本：读写客户端地址与端口（连接密钥与自动接管开关在工具栏弹窗中设置）。 */
 (function () {
   'use strict';
 
   const hostInput = document.getElementById('host');
   const portInput = document.getElementById('port');
-  const autoCapture = document.getElementById('autoCapture');
   const saveBtn = document.getElementById('saveBtn');
   const result = document.getElementById('result');
 
@@ -16,18 +15,16 @@
   function collect() {
     return {
       host: hostInput.value,
-      port: portInput.value,
-      autoCapture: autoCapture.checked
+      port: portInput.value
     };
   }
 
-  // 载入已保存设置（密钥不在本页展示，在弹窗中管理）
+  // 载入已保存设置（密钥与接管开关不在本页展示，在弹窗中管理）
   chrome.runtime.sendMessage({ type: 'get-status' }, (resp) => {
     if (chrome.runtime.lastError || !resp || !resp.settings) return;
     const s = resp.settings;
     hostInput.value = s.host;
     portInput.value = s.port;
-    autoCapture.checked = s.autoCapture !== false;
   });
 
   saveBtn.addEventListener('click', () => {

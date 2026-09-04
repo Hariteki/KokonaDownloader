@@ -100,7 +100,7 @@ var KokonaLogic = (function () {
      *  3. 开始时间早于扩展启动时刻：启动防火墙
      *  4. 开始时间距今超过 30 秒：非本次新发起
      * @param {object} item chrome.downloads.DownloadItem
-     * @param {number} extStartMs 扩展启动时刻（Date.now()），可选；不传则跳过启动防火墙
+     * @param {number} extStartMs 启动防火墙基准时刻（Date.now()，应按浏览器会话持久化）；不传则跳过该项检查
      */
     function isFreshDownload(item, extStartMs) {
         if (!item) return false;

@@ -10,6 +10,7 @@
   const connectBtn = document.getElementById('connectBtn');
   const connectedRow = document.getElementById('connectedRow');
   const modifyBtn = document.getElementById('modifyBtn');
+  const autoCapture = document.getElementById('autoCapture');
   const urlInput = document.getElementById('urlInput');
   const sendBtn = document.getElementById('sendBtn');
   const msg = document.getElementById('msg');
@@ -48,6 +49,9 @@
 
   function render(status, settings) {
     lastSettings = settings;
+    if (autoCapture && !autoCapture.disabled) {
+      autoCapture.checked = settings.autoCapture !== false;
+    }
     if (status.online && status.keyValid) {
       renderConnected(settings, status.version);
     } else {
@@ -118,6 +122,20 @@
     setupSection.classList.remove('hidden');
     keyInput.focus();
     showMsg('', true);
+  });
+
+  // 自动接管开关（原设置页项，已移至主菜单）：只提交该字段，由后台合并保存
+  autoCapture.addEventListener('change', () => {
+    autoCapture.disabled = true;
+    chrome.runtime.sendMessage({ type: 'save-settings', settings: { autoCapture: autoCapture.checked } }, (resp) => {
+      autoCapture.disabled = false;
+      if (chrome.runtime.lastError || !resp || !resp.settings) {
+        showMsg('保存失败：扩展后台通信异常', false);
+        return;
+      }
+      lastSettings = resp.settings;
+      showMsg(autoCapture.checked ? '已开启浏览器下载自动接管' : '已关闭自动接管，仅可右键链接手动发送', autoCapture.checked);
+    });
   });
 
   sendBtn.addEventListener('click', () => {
