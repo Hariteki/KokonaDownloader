@@ -60,6 +60,34 @@ ok(KokonaLogic.shouldCapture(mkItem({ url: "blob:https://x.com/u" }), S, EXT_STA
 ok(KokonaLogic.shouldCapture(mkItem({}), { autoCapture: false, host: "127.0.0.1", port: 16800 }, EXT_START) === false,
     "shouldCapture: autoCapture off -> NOT capture");
 
+// ===== buildDownloadPayload =====
+// Regression: the payload must NOT carry a filename guessed from the URL.
+// A URL-guessed name would pin aria2's "out" to the temporary URL segment and
+// override the real filename delivered via Content-Disposition (exe/zip bug).
+var p1 = KokonaLogic.buildDownloadPayload(
+    mkItem({ url: "https://example.com/download?id=12345" }), S);
+ok(!("filename" in p1),
+    "payload for temp-name URL must NOT carry a guessed filename");
+ok(p1.urls.length === 1 && p1.urls[0] === "https://example.com/download?id=12345",
+    "payload keeps the original url");
+
+// Browser-resolved real filename (from Content-Disposition) is still forwarded.
+var p2 = KokonaLogic.buildDownloadPayload(
+    mkItem({ url: "https://example.com/download?id=12345", filename: "C:/Users/me/Downloads/real-file.exe" }), S);
+ok(p2.filename === "real-file.exe",
+    "browser-resolved filename is forwarded (basename only)");
+
+// referrer passthrough.
+var p3 = KokonaLogic.buildDownloadPayload(
+    mkItem({ url: "https://example.com/a.zip", referrer: "https://example.com/page" }), S);
+ok(p3.referer === "https://example.com/page", "referrer is forwarded");
+ok(!("filename" in p3), "no filename when browser has none (aria2 resolves from headers)");
+
+// Magnet links never carry a filename.
+var p4 = KokonaLogic.buildDownloadPayload(
+    mkItem({ url: "magnet:?xt=urn:btih:abc123", filename: "" }), S);
+ok(!("filename" in p4), "magnet payload carries no filename");
+
 WScript.Echo("-----");
 WScript.Echo("passed " + pass + " / " + (pass + fail));
 WScript.Quit(fail === 0 ? 0 : 1);

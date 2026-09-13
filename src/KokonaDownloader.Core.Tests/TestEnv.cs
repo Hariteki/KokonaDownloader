@@ -38,11 +38,11 @@ internal static class TestEnv
         return port;
     }
 
-    /// <summary>简易本地文件服务器，用于真实下载测试。</summary>
+    /// <summary>简易本地文件服务器，用于真实下载测试。支持为每个文件附加响应头（如 Content-Disposition）。</summary>
     public sealed class FileServer : IDisposable
     {
         private readonly HttpListener _listener = new();
-        private readonly Dictionary<string, byte[]> _files = new();
+        private readonly Dictionary<string, (byte[] Content, Dictionary<string, string> Headers)> _files = new();
         public int Port { get; }
 
         public FileServer()
@@ -53,7 +53,8 @@ internal static class TestEnv
             Task.Run(Loop);
         }
 
-        public void AddFile(string path, byte[] content) => _files[path.TrimStart('/')] = content;
+        public void AddFile(string path, byte[] content, Dictionary<string, string>? headers = null)
+            => _files[path.TrimStart('/')] = (content, headers ?? new Dictionary<string, string>());
         public string Url(string path) => $"http://127.0.0.1:{Port}/{path.TrimStart('/')}";
 
         private async Task Loop()
@@ -72,11 +73,13 @@ internal static class TestEnv
             try
             {
                 var path = ctx.Request.Url!.AbsolutePath.TrimStart('/');
-                if (_files.TryGetValue(path, out var data))
+                if (_files.TryGetValue(path, out var entry))
                 {
                     ctx.Response.StatusCode = 200;
-                    ctx.Response.ContentLength64 = data.Length;
-                    ctx.Response.OutputStream.Write(data);
+                    foreach (var kv in entry.Headers)
+                        ctx.Response.Headers[kv.Key] = kv.Value;
+                    ctx.Response.ContentLength64 = entry.Content.Length;
+                    ctx.Response.OutputStream.Write(entry.Content);
                 }
                 else
                 {

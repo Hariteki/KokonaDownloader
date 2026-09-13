@@ -293,10 +293,8 @@ async function manualSend(url, referrer) {
     return { ok: true, message: '该链接正在发送中，请稍候' };
   }
   forwardingNow.add(key);
-  const payload = {
-    urls: [url],
-    filename: KokonaLogic.fileNameFromUrl(url)
-  };
+  // 不携带从 URL 猜测的文件名：由 aria2 按响应 Content-Disposition 解析真实文件名
+  const payload = { urls: [url] };
   if (referrer) payload.referer = referrer;
   try {
     const r = await forwardDownload(s, payload);

@@ -113,14 +113,16 @@ var KokonaLogic = (function () {
         return true;
     }
 
-    /** 构造发送给客户端 /api/download 的请求体（与 ApiService.ApiDownloadRequest 契约一致）。 */
+    /** 构造发送给客户端 /api/download 的请求体（与 ApiService.ApiDownloadRequest 契约一致）。
+     *  文件名只取浏览器已解析出的真实名（来自响应 Content-Disposition）；
+     *  绝不从 URL 猜测——否则客户端会把 aria2 的 out 固定成 URL 里的临时名，
+     *  覆盖服务器返回的真实文件名。不携带 filename 时由 aria2 自行按响应头解析。 */
     function buildDownloadPayload(item, s) {
         var url = item.url;
         var isMagnet = trim(url).toLowerCase().indexOf('magnet:') === 0;
         var name = item.filename ? baseName(item.filename) : '';
-        if (!name && !isMagnet) name = fileNameFromUrl(url);
         var payload = { urls: [url] };
-        if (name) payload.filename = name;
+        if (name && !isMagnet) payload.filename = name;
         if (item.referrer) payload.referer = item.referrer;
         return payload;
     }

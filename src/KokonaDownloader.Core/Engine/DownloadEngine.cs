@@ -104,16 +104,18 @@ public sealed class DownloadEngine : IAsyncDisposable
     }
 
     /// <summary>普通（非磁力）任务落盘名冲突处理：目标文件已存在时自动改名并把 out 固定为新名，
-    /// 使相同链接可以重复下载而不覆盖旧文件。磁力/BT 任务不做改名（依赖 infohash 注册语义）。</summary>
+    /// 使相同链接可以重复下载而不覆盖旧文件。
+    /// 仅对"可靠文件名"（浏览器解析出的真实名 / 用户显式指定）生效；
+    /// 文件名未知时绝不从 URL 猜测并固定 out——那会覆盖 aria2 按响应 Content-Disposition
+    /// 解析出的真实文件名（动态端点下载 exe/zip 时 URL 里只是临时名）。
+    /// 磁力/BT 任务不做改名（依赖 infohash 注册语义）。</summary>
     private NewTaskRequest ApplyUniqueFileName(NewTaskRequest req)
     {
         if (req.Urls.Any(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase))) return req;
+        if (string.IsNullOrWhiteSpace(req.FileName)) return req; // 文件名未知：交给 aria2 按响应头解析
         var dir = string.IsNullOrWhiteSpace(req.Directory) ? _config.DefaultDownloadDir : req.Directory;
         if (string.IsNullOrEmpty(dir)) return req;
-        var baseName = !string.IsNullOrWhiteSpace(req.FileName)
-            ? req.FileName
-            : GuessFileNameFromUrl(req.Urls.FirstOrDefault());
-        if (string.IsNullOrWhiteSpace(baseName)) return req;
+        var baseName = req.FileName;
         if (!File.Exists(Path.Combine(dir, baseName))) return req;
         var unique = ResolveUniqueFileName(dir, baseName);
         if (string.Equals(unique, req.FileName, StringComparison.Ordinal)) return req;
@@ -447,7 +449,9 @@ public sealed class DownloadEngine : IAsyncDisposable
         {
             Gid = gid,
             TaskNumber = taskNumber,
-            Name = req.FileName ?? string.Empty,
+            // 未指定文件名时，用 URL 末段仅作列表显示占位（aria2 尚未上报真实文件路径前）；
+            // 该值只用于展示，不会传给 aria2 固定 out——真实落盘名由 aria2 按响应头解析后在轮询中更新
+            Name = req.FileName ?? GuessFileNameFromUrl(req.Urls.FirstOrDefault()) ?? string.Empty,
             Urls = req.Urls,
             Referer = req.Referer,
             IsBt = isMagnet,
