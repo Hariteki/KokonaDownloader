@@ -108,7 +108,7 @@ public sealed class ApiService : IDisposable
 
     public int Port { get; }
     public bool IsListening => _listener.IsListening;
-    public string Version { get; } = "1.0.4";
+    public string Version { get; } = "1.0.4b";
 
     /// <summary>收到单条磁力链接（浏览器扩展/系统协议转发）：UI 层订阅后弹独立确认窗口，由用户决定是否下载。</summary>
     public event Action<string>? MagnetConfirmRequested;
