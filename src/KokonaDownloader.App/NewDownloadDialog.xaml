@@ -68,5 +68,6 @@
         </Grid>
 
         <TextBlock x:Name="ErrorText" Foreground="{ThemeResource SystemFillColorCriticalBrush}" FontSize="12" TextWrapping="Wrap" Visibility="Collapsed"/>
+        <TextBlock x:Name="DupNoticeText" Foreground="{ThemeResource SystemFillColorCautionBrush}" FontSize="12" TextWrapping="Wrap" Visibility="Collapsed"/>
     </StackPanel>
 </ContentDialog>

@@ -34,6 +34,27 @@ public partial class MainWindow : Window
     /// <summary>悬停投影只在首帧模板实例化后挂载一次。</summary>
     private bool _shadowsAttached;
 
+    /// <summary>WinUI 同一时刻只允许一个 ContentDialog 处于打开状态：第二个 ShowAsync 会抛
+    /// COMException(0x80000019)「Only a single ContentDialog can be open at any time.」。
+    /// 主窗口里既有用户点出来的对话框（新建下载/批量删除/删除确认），也有浏览器扩展经 API 触发的
+    /// 重复提醒弹窗，两者会互相撞车（历史上 09-01 磁力链接、09-05/09-13 重复提醒都因此失败）。
+    /// 统一走这道闸门串行化：同时只显示一个，后来的按到达顺序排队，避免直接抛错丢提示。</summary>
+    private readonly SemaphoreSlim _dialogGate = new(1, 1);
+
+    /// <summary>串行显示 ContentDialog，返回用户选择结果（闸门忙时排队等待，不会抛 0x80000019）。</summary>
+    private async Task<ContentDialogResult> ShowDialogAsync(Func<ContentDialog> createDialog)
+    {
+        await _dialogGate.WaitAsync();
+        try
+        {
+            return await createDialog().ShowAsync();
+        }
+        finally
+        {
+            _dialogGate.Release();
+        }
+    }
+
     /// <summary>WinUI3 唯一可挂到 UIElement.Shadow 的具体类型是 ThemeShadow（合成层 DropShadow 不派生自它），
     /// 共享一个实例挂到所有悬停投影宿主上，接收者为根 Grid。</summary>
     private void OnRootLoaded(object sender, RoutedEventArgs e)
@@ -779,7 +800,7 @@ public partial class MainWindow : Window
     {
         var list = SelectedTasks().ToList();
         if (list.Count == 0) return;
-        var dlg = new ContentDialog
+        var result = await ShowDialogAsync(() => new ContentDialog
         {
             Title = "批量删除",
             Content = $"确定要删除选中的 {list.Count} 个任务吗？",
@@ -789,8 +810,7 @@ public partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Close,
             PrimaryButtonStyle = (Style)RootGrid.Resources["DangerButtonStyle"],
             XamlRoot = RootGrid.XamlRoot
-        };
-        var result = await dlg.ShowAsync();
+        });
         if (App.Host?.Engine == null || result == ContentDialogResult.None) return;
         var deleteFile = result == ContentDialogResult.Primary;
         foreach (var vm in list)
@@ -871,7 +891,7 @@ public partial class MainWindow : Window
 
     private async Task ConfirmDeleteAsync(TaskItemViewModel vm)
     {
-        var dlg = new ContentDialog
+        var result = await ShowDialogAsync(() => new ContentDialog
         {
             Title = "删除任务",
             Content = $"确定要删除“{vm.Name}”吗？",
@@ -881,8 +901,7 @@ public partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Close,
             PrimaryButtonStyle = (Style)RootGrid.Resources["DangerButtonStyle"],
             XamlRoot = RootGrid.XamlRoot
-        };
-        var result = await dlg.ShowAsync();
+        });
         if (result == ContentDialogResult.Primary && App.Host?.Engine != null)
             await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile: true);
         else if (result == ContentDialogResult.Secondary && App.Host?.Engine != null)
@@ -892,8 +911,7 @@ public partial class MainWindow : Window
     private async Task ShowNewDownloadDialog(string? initialUrl = null)
     {
         App.Log($"[ui] ShowNewDownloadDialog 打开 预填长度={initialUrl?.Length ?? 0}");
-        var dlg = new NewDownloadDialog(App.Host!, initialUrl) { XamlRoot = RootGrid.XamlRoot };
-        await dlg.ShowAsync();
+        await ShowDialogAsync(() => new NewDownloadDialog(App.Host!, initialUrl) { XamlRoot = RootGrid.XamlRoot });
         App.Log("[ui] ShowNewDownloadDialog 返回（对话框已关闭）");
     }
 
@@ -910,25 +928,26 @@ public partial class MainWindow : Window
     /// <summary>扩展送来的链接命中下载中的重复任务：主窗口弹窗提醒用户（任务已被自动跳过，不会重复添加）。</summary>
     private void OnApiDuplicateNotice(string names)
     {
-        DispatcherQueue.TryEnqueue(async () =>
+        bool enqueued = DispatcherQueue.TryEnqueue(async () =>
         {
             try
             {
-                var dlg = new ContentDialog
+                await ShowDialogAsync(() => new ContentDialog
                 {
                     Title = "任务已在下载中",
                     Content = $"以下任务已在下载列表中，浏览器送来的链接已跳过：\n{names}",
                     CloseButtonText = "知道了",
                     DefaultButton = ContentDialogButton.Close,
                     XamlRoot = RootGrid.XamlRoot
-                };
-                await dlg.ShowAsync();
+                });
+                App.Log("[api] 重复提醒弹窗已关闭");
             }
             catch (Exception ex)
             {
-                App.Log($"[api] 重复任务提醒弹窗失败: {ex.Message}");
+                App.Log($"[api] 重复任务提醒弹窗失败: hr=0x{ex.HResult:X8} {ex.Message}");
             }
         });
+        if (!enqueued) App.Log("[api] 重复提醒投递 UI 线程失败");
     }
 
     /// <summary>弹出独立的磁力确认窗口（浏览器扩展 / 系统 magnet: 协议共用）。</summary>

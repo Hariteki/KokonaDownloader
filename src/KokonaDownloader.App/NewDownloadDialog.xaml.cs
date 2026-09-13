@@ -138,7 +138,7 @@ public partial class NewDownloadDialog : ContentDialog
                         .Where(u => !string.IsNullOrWhiteSpace(u))
                         .ToHashSet(StringComparer.OrdinalIgnoreCase);
                     normal = normal.Where(u => !dupUrls.Contains(u)).ToList();
-                    await ShowDuplicateNoticeAsync(
+                    ShowDuplicateNotice(
                         $"以下 {dups.Count} 个任务已在下载列表中，无需重复添加：\n{string.Join("\n", dups.Select(FormatTaskLine))}");
                     if (normal.Count == 0 && magnets.Count == 0) return;
                 }
@@ -182,7 +182,7 @@ public partial class NewDownloadDialog : ContentDialog
         catch (KokonaDownloader.Core.Engine.DuplicateTaskException dex)
         {
             App.Log($"[dialog] 重复任务被拦截: {dex.Message}");
-            await ShowDuplicateNoticeAsync(dex.Message);
+            ShowDuplicateNotice(dex.Message);
         }
         catch (Exception ex)
         {
@@ -191,18 +191,14 @@ public partial class NewDownloadDialog : ContentDialog
         }
     }
 
-    /// <summary>重复任务提醒弹窗：盖在新建下载对话框之上，仅告知不重复添加。</summary>
-    private async Task ShowDuplicateNoticeAsync(string message)
+    /// <summary>重复任务提示：WinUI 同一时刻只允许一个 ContentDialog 打开，在本对话框之上再弹一个
+    /// 会抛 COMException(0x80000019)「Only a single ContentDialog can be open at any time.」，
+    /// 且异常会冲出 async void 事件处理器。改为在对话框内联显示，不再叠一层弹窗。</summary>
+    private void ShowDuplicateNotice(string message)
     {
-        var dlg = new ContentDialog
-        {
-            Title = "任务已在下载中",
-            Content = message,
-            CloseButtonText = "知道了",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = XamlRoot
-        };
-        await dlg.ShowAsync();
+        ErrorText.Visibility = Visibility.Collapsed;
+        DupNoticeText.Text = $"任务已在下载中，未重复添加：\n{message}";
+        DupNoticeText.Visibility = Visibility.Visible;
     }
 
     private static string FormatTaskLine(DownloadTaskInfo t)
