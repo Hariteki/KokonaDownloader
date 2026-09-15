@@ -64,12 +64,142 @@
        单文件发布管线也不会搬运 None 项（aria2c.exe/托盘图标），同样从构建输出目录补齐 -->
   <Target Name="CopyXamlResourcesToPublishDir" AfterTargets="Publish">
     <ItemGroup>
-      <_XamlRes Include="$(TargetDir)*.xbf" />
+      <!-- xbf 用 **\ 递归：Themes\ThemeSwatchPicker.xbf 等子目录页面也必须随发布输出，
+           否则设置窗口加载 ThemeSwatchPicker 会因缺 xbf 而 XamlParseException -->
+      <!-- 取自 obj（XAML 编译器产物目录）：干净构建下 bin 不会被自动写入 xbf -->
+      <_XamlRes Include="$(IntermediateOutputPath)**\*.xbf" Exclude="$(IntermediateOutputPath)embed\**" />
       <_XamlRes Include="$(TargetDir)$(ProjectPriFileName)" />
       <_XamlRes Include="$(TargetDir)aria2c.exe" />
       <_TrayIcons Include="$(TargetDir)icons\**\*" />
     </ItemGroup>
-    <Copy SourceFiles="@(_XamlRes)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_XamlRes)" DestinationFolder="$(PublishDir)\%(RecursiveDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(_TrayIcons)" DestinationFolder="$(PublishDir)icons\%(RecursiveDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- PRI 生成链里的 _GenerateProjectPriConfigurationFiles 会把 @(_EmbedFile)（bin 下的 xbf）
+        复制到 obj\embed\；但干净构建下 bin 还没有 xbf（XAML 编译器只把产物写到 obj），Copy 会 MSB3030。
+        这里在 PRI 链跑到该目标前，先把 obj 的 xbf 补一份到 bin，使状态与 publish 时一致（bin 有 xbf）。 -->
+  <Target Name="CopyXbfToBinForPri" BeforeTargets="_GenerateProjectPriConfigurationFiles">
+    <ItemGroup>
+      <_XbfToBin Include="$(IntermediateOutputPath)**\*.xbf" Exclude="$(IntermediateOutputPath)embed\**" />
+    </ItemGroup>
+    <MakeDir Directories="$(TargetDir)" Condition="!Exists('$(TargetDir)')" />
+    <Copy SourceFiles="@(_XbfToBin)" DestinationFolder="$(TargetDir)%(RecursiveDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- 单文件独立运行：把单文件管线不会搬运的散文件嵌入 exe 作为资源，
+        启动时由 StandaloneBootstrap（[ModuleInitializer]）在 XAML 初始化前解压到 exe 旁。
+        aria2c.exe / 托盘图标取自源码树固定路径。LogicalName 统一 standalone/ 前缀 -->
+  <!-- 钩子必须是 _GenerateCompileInputs（CompileDependsOn 链中先于 CoreCompile 运行）：
+        它在 CoreCompile 之前把 @(EmbeddedResource) 快照进 @(_CoreCompileResourceInputs)，
+        csc 只接收该快照。若挂在 BeforeTargets="CoreCompile"，本目标反而在快照之后运行，项会被漏掉。
+        同时本目标在 PrepareResources/SplitResourcesByCulture 之后运行，项不会经过 AssignCulture，
+        必须显式声明 WithCulture/Type 元数据，否则 _GenerateCompileInputs 会把它们过滤掉 -->
+  <!-- xbf 取自 obj（$(IntermediateOutputPath)）：XAML 编译器（MarkupCompilePass1/2，PrepareResources 阶段）
+        把编译产物写到 obj\...\win-x64\，此时 bin 还是空的，不能从 TargetDir 取；
+        排除 embed\ 子目录（MRT _EmbedFileCopy 的副本，避免重复嵌入）。 -->
+  <!-- resources.pri 由本目标 DependsOnTargets 在 CoreCompile 之前显式生成（MRT 标准链：
+        _GetSdkToolPaths → GetMrtPackagingOutputs → _GetDefaultResourceLanguage → _GenerateProjectPriFile），
+        makepri 把 PRI 写到 bin\...\resources.pri，csc 时已存在；
+        Exists() 条件保证未生成 PRI 的开发构建不会 CS1566。 -->
+  <!-- 关键坑：在 <Target> 内创建项时，元数据里引用 %(RecursiveDir)%(Filename)%(Extension)
+       会求值为空（8 个 xbf 全部塌成裸 "standalone/" → CS1508 资源标识符重复）。
+       同样的 %(RecursiveDir) 在任务输入参数里却能正常求值。
+       因此 xbf 的 LogicalName 用 C# 内联任务按相对路径计算并写回，其余项用固定字符串。 -->
+  <UsingTask TaskName="SetStandaloneLogicalNames" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <Task>
+      <Code Type="Class" Language="cs">
+        <![CDATA[
+        using System;
+        using Microsoft.Build.Framework;
+
+        public class SetStandaloneLogicalNames : ITask
+        {
+          public ITaskItem[] Items { get; set; }
+          public string Prefix { get; set; }
+          public string ProjectDir { get; set; }
+          [Microsoft.Build.Framework.Output]
+          public ITaskItem[] ResultItems { get; set; }
+          public IBuildEngine BuildEngine { get; set; }
+          public ITaskHost HostObject { get; set; }
+
+          public bool Execute()
+          {
+            string prefix = Prefix;
+            if (prefix != null && !System.IO.Path.IsPathRooted(prefix))
+            {
+              string baseDir = ProjectDir;
+              if (string.IsNullOrEmpty(baseDir)) baseDir = System.IO.Directory.GetCurrentDirectory();
+              prefix = System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, prefix));
+            }
+            var results = new System.Collections.Generic.List<ITaskItem>();
+            if (Items != null)
+            {
+              foreach (var item in Items)
+              {
+                string full = item.GetMetadata("FullPath");
+                if (string.IsNullOrEmpty(full)) full = item.ItemSpec;
+                if (!System.IO.Path.IsPathRooted(full)) full = System.IO.Path.GetFullPath(full);
+                if (prefix != null && full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                  string rel = full.Substring(prefix.Length).TrimStart('\\', '/');
+                  rel = rel.Replace('\\', '/');
+                  var newItem = new Microsoft.Build.Utilities.TaskItem(item.ItemSpec);
+                  foreach (var meta in new[] { "WithCulture", "Type" })
+                  {
+                    string val = item.GetMetadata(meta);
+                    if (!string.IsNullOrEmpty(val)) newItem.SetMetadata(meta, val);
+                  }
+                  newItem.SetMetadata("LogicalName", "standalone/" + rel);
+                  results.Add(newItem);
+                }
+                else
+                {
+                  results.Add(item);
+                }
+              }
+            }
+            ResultItems = results.ToArray();
+            return true;
+          }
+        }
+        ]]>
+      </Code>
+      <Reference Include="Microsoft.Build.Framework" />
+    </Task>
+  </UsingTask>
+
+  <Target Name="EmbedStandalonePayload" BeforeTargets="_GenerateCompileInputs"
+          DependsOnTargets="_GetSdkToolPaths;GetMrtPackagingOutputs;_GetDefaultResourceLanguage;_GenerateProjectPriFile">
+    <ItemGroup>
+      <EmbeddedResource Include="$(IntermediateOutputPath)**\*.xbf" Exclude="$(IntermediateOutputPath)embed\**">
+        <WithCulture>false</WithCulture>
+        <Type>Non-Resx</Type>
+      </EmbeddedResource>
+      <EmbeddedResource Include="$(TargetDir)$(ProjectPriFileName)" Condition="Exists('$(TargetDir)$(ProjectPriFileName)')" LogicalName="standalone/$(ProjectPriFileName)">
+        <WithCulture>false</WithCulture>
+        <Type>Non-Resx</Type>
+      </EmbeddedResource>
+      <EmbeddedResource Include="..\..\vendor\aria2\aria2c.exe" LogicalName="standalone/aria2c.exe">
+        <WithCulture>false</WithCulture>
+        <Type>Non-Resx</Type>
+      </EmbeddedResource>
+      <EmbeddedResource Include="..\..\icons\titlebar-tray\tray.ico" LogicalName="standalone/icons/tray.ico">
+        <WithCulture>false</WithCulture>
+        <Type>Non-Resx</Type>
+      </EmbeddedResource>
+      <EmbeddedResource Include="..\..\icons\titlebar-tray\icon-32.png" LogicalName="standalone/icons/tray.png">
+        <WithCulture>false</WithCulture>
+        <Type>Non-Resx</Type>
+      </EmbeddedResource>
+    </ItemGroup>
+    <SetStandaloneLogicalNames Items="@(EmbeddedResource)" Prefix="$(IntermediateOutputPath)" ProjectDir="$(MSBuildProjectDirectory)">
+      <Output TaskParameter="ResultItems" ItemName="_StandaloneEmbeddedResources" />
+    </SetStandaloneLogicalNames>
+    <ItemGroup>
+      <EmbeddedResource Remove="@(EmbeddedResource)" />
+      <EmbeddedResource Include="@(_StandaloneEmbeddedResources)" />
+    </ItemGroup>
   </Target>
 </Project>
