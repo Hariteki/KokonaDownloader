@@ -56,22 +56,6 @@ var KokonaLogic = (function () {
         return u.indexOf(base) === 0;
     }
 
-    /** 从 URL 推断文件名：去掉查询串/锚点/协议，解码最后一段路径。 */
-    function fileNameFromUrl(url) {
-        var path = String(url == null ? '' : url);
-        var qi = path.indexOf('?');
-        if (qi >= 0) path = path.substring(0, qi);
-        var hi = path.indexOf('#');
-        if (hi >= 0) path = path.substring(0, hi);
-        var si = path.indexOf('://');
-        if (si >= 0) path = path.substring(si + 3);
-        var slash = path.lastIndexOf('/');
-        var name = slash >= 0 ? path.substring(slash + 1) : path;
-        try { name = decodeURIComponent(name); } catch (e) { /* 解码失败保留原样 */ }
-        name = trim(name);
-        return name ? name : 'download';
-    }
-
     /** 从完整路径（浏览器给出的拟保存路径）取文件名，兼容 / 与 \。 */
     function baseName(p) {
         p = String(p == null ? '' : p);
@@ -116,7 +100,9 @@ var KokonaLogic = (function () {
     /** 构造发送给客户端 /api/download 的请求体（与 ApiService.ApiDownloadRequest 契约一致）。
      *  文件名只取浏览器已解析出的真实名（来自响应 Content-Disposition）；
      *  绝不从 URL 猜测——否则客户端会把 aria2 的 out 固定成 URL 里的临时名，
-     *  覆盖服务器返回的真实文件名。不携带 filename 时由 aria2 自行按响应头解析。 */
+     *  覆盖服务器返回的真实文件名。不携带 filename 时由 aria2 自行按响应头解析。
+     *  （客户端另有一道防线：与 URL 末段同名的伪文件名会被丢弃，
+     *   见 DownloadEngine.DropUrlDerivedFileName，防止旧版扩展/外部脚本重新引入此问题。） */
     function buildDownloadPayload(item, s) {
         var url = item.url;
         var isMagnet = trim(url).toLowerCase().indexOf('magnet:') === 0;
@@ -145,7 +131,6 @@ var KokonaLogic = (function () {
         baseUrl: baseUrl,
         isSupportedUrl: isSupportedUrl,
         isOwnApiUrl: isOwnApiUrl,
-        fileNameFromUrl: fileNameFromUrl,
         baseName: baseName,
         shouldCapture: shouldCapture,
         isFreshDownload: isFreshDownload,

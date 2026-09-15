@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Automation;
 using KokonaDownloader.Core.Engine;
@@ -92,31 +93,43 @@ internal static class Program
             Console.WriteLine($"[OK] 应用已启动 pid={appProcess.Id}");
             pid = appProcess.Id;
 
-            // 4) 等待主窗口与预填对话框，校验磁力已进地址栏
-            var appWin = Wait(() => FindAppWindow(pid, ""), TimeSpan.FromSeconds(60), "主窗口");
-            var appHwnd = HwndOf(appWin);
-            var btnStart = Wait(() => FindIn(appWin, ControlType.Button, "开始下载"),
-                TimeSpan.FromSeconds(60), "新建下载对话框");
-            VerifyPrefill(appWin, torrent.InfoHashHex);
-            BringToFront(appHwnd);
+            // 4) 磁力唤起 → 独立确认窗（主窗口保持隐藏，不再弹"新建下载"对话框），校验链接已预填
+            var confirmWin = Wait(() => FindMagnetConfirmWindow(pid), TimeSpan.FromSeconds(60), "磁力链接下载确认窗口");
+            var confirmHwnd = HwndOf(confirmWin);
+            VerifyPrefill(confirmWin, torrent.InfoHashHex);
+            BringToFront(confirmHwnd);
             Thread.Sleep(600);
-            Shot(appWin, Path.Combine(shotDir, "ui_01_dialog_magnet_prefilled.png"));
+            Shot(confirmWin, Path.Combine(shotDir, "ui_01_magnet_confirm_prefilled.png"));
 
-            // 5) 限速 500 KB/s 并提交
-            SelectSpeed(appWin, SpeedOption);
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] 触发开始下载按钮 Invoke");
+            // 4b) 确认窗没有逐任务限速，改用全局限速（设置变更会热更新到 aria2）压到 500 KB/s，
+            //     否则小种瞬间下完，"下载中"的中间态截图无从拍起。收尾恢复设置文件即还原。
+            SetGlobalSpeedLimit(store.Current.ApiPort, store.Current.ApiSecret, 500 * 1024);
+
+            // 5) 确认窗点"开始下载"
+            var btnStart = Wait(() => FindIn(confirmWin, ControlType.Button, "开始下载"),
+                TimeSpan.FromSeconds(20), "确认窗开始下载按钮");
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] 触发确认窗开始下载按钮 Invoke");
             ((InvokePattern)btnStart.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
             try
             {
-                WaitTrue(() => FindIn(appWin, ControlType.Button, "开始下载") == null,
-                    TimeSpan.FromSeconds(10), "对话框关闭");
+                WaitTrue(() => FindMagnetConfirmWindow(pid) == null,
+                    TimeSpan.FromSeconds(15), "确认窗关闭");
             }
             catch (TimeoutException)
             {
-                DumpErrorTexts(appWin);
+                DumpErrorTexts(confirmWin);
                 throw;
             }
-            Console.WriteLine("[OK] 对话框已提交，任务已创建");
+            Console.WriteLine("[OK] 确认窗已提交，任务已创建");
+
+            // 5b) 磁力唤起不显示主窗口：再启一个实例（无参数）触发"显示窗口"事件，主窗口才会出现
+            Process.Start(new ProcessStartInfo(appExe) { UseShellExecute = false });
+            var appWin = Wait(() => FindMainWindow(pid), TimeSpan.FromSeconds(30), "主窗口");
+            var appHwnd = HwndOf(appWin);
+            Console.WriteLine("[OK] 主窗口已显示");
+
+            // 5c) 顺带回归主窗口"新建下载"对话框与逐任务限速下拉（原流程的覆盖点，已挪到此处）
+            TryDialogCoverage(appWin, shotDir);
 
             // 6) 应用为新任务自动打开进度窗口；分阶段截取方块矩阵中间态
             var prog = Wait(() => FindAppWindow(pid, TorrentName), TimeSpan.FromSeconds(30), "进度窗口");
@@ -128,14 +141,15 @@ internal static class Program
             Thread.Sleep(1000);
             Shot(appWin, Path.Combine(shotDir, "ui_03_main_card_matrix_compact.png"));
 
-            var btTab = Wait(() => FindIn(appWin, ControlType.RadioButton, "BT"), TimeSpan.FromSeconds(10), "BT 标签");
-            ((SelectionItemPattern)btTab.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+            // BT 页签：内容为"BT下载"，且自定义模板下按钮自身无名 → 按文本向上找 RadioButton
+            SelectTabByText(appWin, "BT下载");
             Thread.Sleep(1000);
             Shot(appWin, Path.Combine(shotDir, "ui_04_btpage_matrix_partial.png"));
 
             // 7) 等待下载完成（aria2 默认 prealloc 预分配，文件尺寸不可靠，以进度窗口百分比为准）
+            //    限速改成全局限速 500 KB/s（磁力确认窗没有逐任务限速），耗时与原来相当
             WaitTrue(() => UiPercentDone(prog),
-                TimeSpan.FromSeconds(150), $"下载完成（{SpeedOption} 限速约需 20s）");
+                TimeSpan.FromSeconds(180), "下载完成（全局限速 500 KB/s 约需 20s）");
             Thread.Sleep(2500);
 
             BringToFront(progHwnd);
@@ -146,12 +160,10 @@ internal static class Program
             Thread.Sleep(800);
             Shot(appWin, Path.Combine(shotDir, "ui_06_btpage_matrix_complete.png"));
 
-            if (FindIn(appWin, ControlType.RadioButton, "全部") is { } allTab)
-            {
-                ((SelectionItemPattern)allTab.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
-                Thread.Sleep(800);
-                Shot(appWin, Path.Combine(shotDir, "ui_07_main_card_matrix_complete.png"));
-            }
+            try { SelectTabByText(appWin, "全部"); }
+            catch (TimeoutException ex) { Console.WriteLine($"[WARN] 切回全部页签失败: {ex.Message}"); }
+            Thread.Sleep(800);
+            Shot(appWin, Path.Combine(shotDir, "ui_07_main_card_matrix_complete.png"));
 
             Console.WriteLine("[DONE] 全部截图完成");
         }
@@ -231,6 +243,103 @@ internal static class Program
         root.FindFirst(TreeScope.Descendants, new AndCondition(
             new PropertyCondition(AutomationElement.ControlTypeProperty, type),
             new PropertyCondition(AutomationElement.NameProperty, name)));
+
+    /// <summary>
+    /// 磁力确认窗：v1.0.6 起命令行/扩展磁力不再弹"新建下载"对话框，
+    /// 而是主窗口保持隐藏、另弹独立确认窗（标题"磁力链接下载确认"）。
+    /// </summary>
+    private static AutomationElement? FindMagnetConfirmWindow(int pid)
+        => FindAppWindow(pid, "磁力链接下载确认");
+
+    /// <summary>
+    /// 主窗口识别：不能再用"该进程第一个窗口"——启动瞬间最顶层的是启动动画（420×420），
+    /// 抢到它之后句柄随动画关闭失效，后续查找必然超时。改用主窗口独有的工具文本特征
+    /// （"新建下载"按钮内的 TextBlock；WinUI 的 Button 自身 Name 为空，文本才带名字）。
+    /// </summary>
+    private static AutomationElement? FindMainWindow(int pid)
+    {
+        var windows = AutomationElement.RootElement.FindAll(TreeScope.Children,
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window));
+        foreach (AutomationElement w in windows)
+        {
+            try
+            {
+                if (w.Current.ProcessId != pid) continue;
+                if (FindIn(w, ControlType.Text, "新建下载") != null) return w;
+            }
+            catch (ElementNotAvailableException) { }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 按可见文本找指定类型的可点击祖先：WinUI 自定义模板（FilterTabStyle / BtToggleButtonStyle /
+    /// 带图标的按钮）里，命名元素是内部的 TextBlock，控件自身 UIA Name 为空。
+    /// </summary>
+    private static AutomationElement? FindClickableByText(AutomationElement root, string text, ControlType type)
+    {
+        var label = FindIn(root, ControlType.Text, text) ?? FindIn(root, type, text);
+        if (label == null) return null;
+        var walker = TreeWalker.ControlViewWalker;
+        var node = label;
+        for (var i = 0; i < 6 && node != null; i++)
+        {
+            try
+            {
+                if (node.Current.ControlType == type) return node;
+                node = walker.GetParent(node);
+            }
+            catch (ElementNotAvailableException) { return null; }
+        }
+        return null;
+    }
+
+    /// <summary>选中单选项（筛选页签用）——按钮自身常无名，需按文本向上找 RadioButton。</summary>
+    private static AutomationElement SelectTabByText(AutomationElement appWin, string text)
+    {
+        var tab = Wait(() => FindClickableByText(appWin, text, ControlType.RadioButton),
+            TimeSpan.FromSeconds(10), $"{text} 页签");
+        ((SelectionItemPattern)tab.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+        return tab;
+    }
+
+    /// <summary>通过本地 API 设置全局限速（设置变更会被 AppHost 热更新到 aria2）。</summary>
+    private static void SetGlobalSpeedLimit(int apiPort, string secret, long bytesPerSec)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        var msg = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{apiPort}/api/settings");
+        msg.Headers.Add("X-Kokona-Secret", secret);
+        msg.Content = new StringContent($"{{\"globalSpeedLimit\":{bytesPerSec}}}", Encoding.UTF8, "application/json");
+        var resp = http.Send(msg);
+        Console.WriteLine(resp.IsSuccessStatusCode
+            ? $"[OK] 全局限速已设为 {bytesPerSec / 1024} KB/s（API）"
+            : $"[WARN] 设置全局限速失败: HTTP {(int)resp.StatusCode}");
+    }
+
+    /// <summary>
+    /// 回归主窗口"新建下载"对话框：打开 → 选限速 → 截图 → 取消关闭。
+    /// 任何一步失败只告警不中断主流程（该覆盖点是附加回归，不是主链路）。
+    /// </summary>
+    private static void TryDialogCoverage(AutomationElement appWin, string shotDir)
+    {
+        try
+        {
+            var newBtn = Wait(() => FindClickableByText(appWin, "新建下载", ControlType.Button), TimeSpan.FromSeconds(10), "新建下载按钮");
+            ((InvokePattern)newBtn.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            Wait(() => FindIn(appWin, ControlType.Text, "保存目录"), TimeSpan.FromSeconds(10), "新建下载对话框");
+            SelectSpeed(appWin, SpeedOption);
+            Thread.Sleep(500);
+            Shot(appWin, Path.Combine(shotDir, "ui_01b_new_download_dialog_speed.png"));
+            var cancel = FindClickableByText(appWin, "取消", ControlType.Button);
+            if (cancel != null) ((InvokePattern)cancel.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
+            Thread.Sleep(600);
+            Console.WriteLine("[OK] 新建下载对话框覆盖完成（限速下拉可选，已取消）");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] 新建下载对话框覆盖跳过: {ex.Message}");
+        }
+    }
 
     private static void VerifyPrefill(AutomationElement appWin, string infoHash)
     {

@@ -77,6 +77,21 @@ public class FileNameResolutionTests : IAsyncLifetime
         return JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
     }
 
+    /// <summary>外部调用方显式带上文件名（可能是浏览器解析出的真名，也可能是从链接末段猜的伪名）。</summary>
+    private async Task<string> SendDownloadWithFileName(string url, string fileName)
+    {
+        var msg = new HttpRequestMessage(HttpMethod.Post, "/api/download");
+        msg.Headers.Add("X-Kokona-Secret", Secret);
+        msg.Content = new StringContent(JsonSerializer.Serialize(new
+        {
+            urls = new[] { url },
+            filename = fileName
+        }), Encoding.UTF8, "application/json");
+        var resp = await _http.SendAsync(msg);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        return JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement.GetProperty("gid").GetString()!;
+    }
+
     /// <summary>轮询 /api/tasks 直到指定 gid 的任务到达终态，返回该任务的 JSON。</summary>
     private async Task<JsonElement> WaitTaskAsync(string gid)
     {
@@ -168,6 +183,64 @@ public class FileNameResolutionTests : IAsyncLifetime
         var dir = _settings.Current.DefaultDownloadDir;
         Assert.True(File.Exists(Path.Combine(dir, "user-chosen.exe")),
             $"应存在 user-chosen.exe，实际目录内容: {string.Join(", ", Directory.GetFiles(dir))}");
+    }
+
+    [Fact]
+    public async Task URL末段伪文件名不再覆盖响应头真实名()
+    {
+        // 用户报告场景（文件名来自响应头）：链接是不带扩展名的编号，外部调用方
+        // 把链接末段当文件名发过来（旧版扩展行为），真实名只在 Content-Disposition 里。
+        _fileServer.AddFile("23_377276", new byte[48 * 1024],
+            new Dictionary<string, string> { ["Content-Disposition"] = "attachment; filename=\"cinebenchr2323.2.zip\"" });
+        var url = _fileServer.Url("23_377276");
+
+        var gid = await SendDownloadWithFileName(url, "23_377276");
+        var task = await WaitTaskAsync(gid);
+        Assert.Equal("completed", task.GetProperty("state").GetString());
+
+        var dir = _settings.Current.DefaultDownloadDir;
+        Assert.True(File.Exists(Path.Combine(dir, "cinebenchr2323.2.zip")),
+            $"应落盘响应头里的真实名，实际目录内容: {string.Join(", ", Directory.GetFiles(dir))}");
+        Assert.False(File.Exists(Path.Combine(dir, "23_377276")), "不应落盘为 URL 编号伪名 23_377276");
+        Assert.Equal("cinebenchr2323.2.zip", task.GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task 编号链接302重定向时按重定向目标命名()
+    {
+        // 真实站点形态：https://down.wsyhn.com/23_377276 --302--> https://soft.wsyhn.com/soft/cinebenchr2323.2.zip
+        // 响应头没有 Content-Disposition，真实文件名只在重定向目标里
+        _fileServer.AddFile("soft/cinebenchr2323.2.zip", new byte[48 * 1024]);
+        _fileServer.AddRedirect("23_377276", _fileServer.Url("soft/cinebenchr2323.2.zip"));
+        var url = _fileServer.Url("23_377276");
+
+        var resp = await SendDownloadWithoutFileName(url);
+        var gid = resp.GetProperty("gid").GetString()!;
+        var task = await WaitTaskAsync(gid);
+        Assert.Equal("completed", task.GetProperty("state").GetString());
+
+        var dir = _settings.Current.DefaultDownloadDir;
+        Assert.True(File.Exists(Path.Combine(dir, "cinebenchr2323.2.zip")),
+            $"应按重定向目标命名，实际目录内容: {string.Join(", ", Directory.GetFiles(dir))}");
+        Assert.False(File.Exists(Path.Combine(dir, "23_377276")), "不应落盘为编号链接末段");
+    }
+
+    [Fact]
+    public async Task 编号链接重定向且带伪文件名时仍按重定向目标命名()
+    {
+        // 用户实际场景：既走 302，外部调用方又带了链接末段伪名——伪名必须被丢弃
+        _fileServer.AddFile("soft/cinebenchr2323.2.zip", new byte[48 * 1024]);
+        _fileServer.AddRedirect("23_377276", _fileServer.Url("soft/cinebenchr2323.2.zip"));
+        var url = _fileServer.Url("23_377276");
+
+        var gid = await SendDownloadWithFileName(url, "23_377276");
+        var task = await WaitTaskAsync(gid);
+        Assert.Equal("completed", task.GetProperty("state").GetString());
+
+        var dir = _settings.Current.DefaultDownloadDir;
+        Assert.True(File.Exists(Path.Combine(dir, "cinebenchr2323.2.zip")),
+            $"应按重定向目标命名，实际目录内容: {string.Join(", ", Directory.GetFiles(dir))}");
+        Assert.False(File.Exists(Path.Combine(dir, "23_377276")), "伪名不应固定 out");
     }
 
     [Fact]

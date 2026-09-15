@@ -38,11 +38,13 @@ internal static class TestEnv
         return port;
     }
 
-    /// <summary>简易本地文件服务器，用于真实下载测试。支持为每个文件附加响应头（如 Content-Disposition）。</summary>
+    /// <summary>简易本地文件服务器，用于真实下载测试。支持为每个文件附加响应头（如 Content-Disposition），
+    /// 以及把某个路径配置成 302 重定向（模拟"编号链接 → 真实文件名"的下载站）。</summary>
     public sealed class FileServer : IDisposable
     {
         private readonly HttpListener _listener = new();
         private readonly Dictionary<string, (byte[] Content, Dictionary<string, string> Headers)> _files = new();
+        private readonly Dictionary<string, string> _redirects = new();
         public int Port { get; }
 
         public FileServer()
@@ -56,6 +58,8 @@ internal static class TestEnv
         public void AddFile(string path, byte[] content, Dictionary<string, string>? headers = null)
             => _files[path.TrimStart('/')] = (content, headers ?? new Dictionary<string, string>());
         public string Url(string path) => $"http://127.0.0.1:{Port}/{path.TrimStart('/')}";
+        /// <summary>把 path 配置为 302 重定向到 location（通常是另一个 Url(...)）。</summary>
+        public void AddRedirect(string path, string location) => _redirects[path.TrimStart('/')] = location;
 
         private async Task Loop()
         {
@@ -73,7 +77,12 @@ internal static class TestEnv
             try
             {
                 var path = ctx.Request.Url!.AbsolutePath.TrimStart('/');
-                if (_files.TryGetValue(path, out var entry))
+                if (_redirects.TryGetValue(path, out var location))
+                {
+                    ctx.Response.StatusCode = 302;
+                    ctx.Response.Headers["Location"] = location;
+                }
+                else if (_files.TryGetValue(path, out var entry))
                 {
                     ctx.Response.StatusCode = 200;
                     foreach (var kv in entry.Headers)

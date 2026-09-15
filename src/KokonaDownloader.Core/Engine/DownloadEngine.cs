@@ -133,6 +133,43 @@ public sealed class DownloadEngine : IAsyncDisposable
         };
     }
 
+    /// <summary>
+    /// 剔除"只是把 URL 末段重复一遍"的伪文件名。
+    ///
+    /// 背景：部分站点用不带扩展名的编号链接指向真实文件，真实文件名只在
+    /// 响应头（Content-Disposition）或 302 重定向目标里，例如
+    ///   https://down.wsyhn.com/23_377276 --302--&gt; https://soft.wsyhn.com/soft/cinebenchr2323.2.zip
+    /// 旧版扩展/外部脚本会把链接末段当文件名发过来（"23_377276"），一旦它被固定为
+    /// aria2 的 out，真实文件名就永远解析不出来，落盘名会是不带扩展名的编号。
+    ///
+    /// 判定：给定文件名与任一 URL 的末段（去查询串、URL 解码后）相同 → 视为伪名丢弃，
+    /// 交给 aria2 按响应头/重定向解析。与 URL 末段不同的名字（用户手填、浏览器已解析出的
+    /// 真实名）保持原样，仍固定 out。
+    /// </summary>
+    private NewTaskRequest DropUrlDerivedFileName(NewTaskRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.FileName)) return req;
+        var name = req.FileName!.Trim();
+        foreach (var url in req.Urls)
+        {
+            var seg = GuessFileNameFromUrl(url);
+            if (seg == null || !string.Equals(seg, name, StringComparison.OrdinalIgnoreCase)) continue;
+            _log($"忽略 URL 末段伪文件名 '{name}'：交由 aria2 按响应头/重定向解析真实文件名");
+            return new NewTaskRequest
+            {
+                Urls = req.Urls,
+                Directory = req.Directory,
+                FileName = null,
+                Connections = req.Connections,
+                SpeedLimit = req.SpeedLimit,
+                Referer = req.Referer,
+                Headers = req.Headers,
+                ExtraOptions = req.ExtraOptions
+            };
+        }
+        return req;
+    }
+
     public async Task StartAsync(CancellationToken ct = default)
     {
         lock (_startLock)
@@ -436,6 +473,8 @@ public sealed class DownloadEngine : IAsyncDisposable
         }
         else
         {
+            // 先剔除"只是把 URL 末段重复一遍"的伪文件名，再做重名冲突处理
+            req = DropUrlDerivedFileName(req);
             // 相同文件已存在时自动重命名（追加编号），新任务不覆盖历史下载
             req = ApplyUniqueFileName(req);
         }

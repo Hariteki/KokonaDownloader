@@ -25,3 +25,7 @@ extension.pem
 .verify/
 backup/
 testsite/
+
+# UiTests 宿主每次运行都会重新生成的截图与失败诊断（不是 README 用的产品截图）
+screenshot/ui_*.png
+screenshot/diag_*.png
