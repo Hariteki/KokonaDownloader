@@ -2,7 +2,9 @@ using System.Runtime.CompilerServices;
 using KokonaDownloader.Core.Settings;
 using KokonaDownloader.Core.Themes;
 using Microsoft.UI;
+using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI;
 using Windows.UI.ViewManagement;
@@ -23,14 +25,23 @@ public static class ThemeService
     public static event Action? ThemeChanged;
 
     private static readonly List<WeakReference<Window>> Windows = new();
+
+    /// <summary>每个窗口当前挂载的原生背景控制器（切换透明度模式时需要释放）。</summary>
+    private static readonly Dictionary<Window, ISystemBackdropControllerWithTargets> _backdrops = new();
     private static ResourceDictionary? _overrides;
     private static UISettings? _uiSettings;
+    /// <summary>UI 线程的 DispatcherQueue（Initialize 时捕获，供跨线程设置变更调度回 UI 线程）。</summary>
+    private static Microsoft.UI.Dispatching.DispatcherQueue? _uiQueue;
 
     public static ResolvedTheme Current { get; private set; } =
         ThemeCatalog.Resolve(ThemeCatalog.SystemId);
 
     public static void Initialize()
     {
+        // 捕获 UI 线程调度队列（Initialize 在 OnLaunched 中于 UI 线程调用）
+        try { _uiQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread(); }
+        catch (Exception ex) { App.Log($"捕获 UI 调度队列失败: {ex.Message}"); }
+
         _overrides = new ResourceDictionary();
         Application.Current.Resources.MergedDictionaries.Add(_overrides);
 
@@ -51,7 +62,16 @@ public static class ThemeService
         Apply();
     }
 
-    private static void OnSettingsChanged(object? sender, EventArgs e) => Apply();
+    private static void OnSettingsChanged(object? sender, EventArgs e)
+    {
+        // 设置可能来自 API 线程（POST /api/settings）：资源字典/窗口刷新必须在 UI 线程执行，
+        // 否则跨线程访问 XAML 会抛异常 → API 返回 500。UI 线程上保持同步刷新（点击即时生效）。
+        var dq = _uiQueue ?? App.MainWin?.DispatcherQueue;
+        if (dq != null && !dq.HasThreadAccess)
+            dq.TryEnqueue(Apply);
+        else
+            Apply();
+    }
 
     /// <summary>切换主题配色（写设置 → 持久化 → Changed → 全窗口刷新）。</summary>
     public static void SetThemeColor(string id) =>
@@ -62,11 +82,25 @@ public static class ThemeService
             return true;
         });
 
+    /// <summary>切换窗口透明度模式（写设置 → 持久化 → Changed → 全窗口刷新）。</summary>
+    public static void SetTransparencyMode(TransparencyMode mode) =>
+        App.Host?.Settings.Update(s =>
+        {
+            if (s.Transparency == mode) return false;
+            s.Transparency = mode;
+            return true;
+        });
+
+    /// <summary>当前透明度模式。</summary>
+    public static TransparencyMode CurrentTransparency =>
+        App.Host?.Settings.Current.Transparency ?? TransparencyMode.Opaque;
+
     public static void Register(Window window)
     {
         PruneWindows();
         Windows.Add(new WeakReference<Window>(window));
         ApplyCaption(window);
+        ApplyTransparency(window);
     }
 
     public static void Unregister(Window window)
@@ -97,9 +131,79 @@ public static class ThemeService
         foreach (var w in AllWindows())
         {
             ApplyCaption(w);
+            ApplyTransparency(w);
             ForceThemeResourceRefresh(w);
         }
         ThemeChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// 按当前透明度模式设置窗口背景与原生 Acrylic 背景：
+    ///  Opaque           → 无背景层 + 实心主题背景（完全不透明）
+    ///  Frosted          → 半透明主题色 + Acrylic 磨砂（能透出后面的桌面/窗口，带模糊）
+    ///  BlackTransparent → 黑色薄磨砂（最低不透明度，几乎全透明）
+    ///
+    /// 实现说明：XAML 的 MicaBackdrop/DesktopAcrylicBackdrop 在本机实测"设了但不透桌面"
+    /// （采样点亮度恒为常数、与窗口后面的内容无关），因此改用本项目进度窗已验证生效的
+    /// 原生 DesktopAcrylicController，并在切换模式时释放上一个控制器。
+    /// </summary>
+    public static void ApplyTransparency(Window window)
+    {
+        try
+        {
+            var mode = CurrentTransparency;
+            var t = Current;
+
+            // 先释放上一个原生背景，避免多个控制器叠加
+            ReleaseBackdrop(window);
+
+            var root = window.Content as Grid;
+
+            switch (mode)
+            {
+                case TransparencyMode.Opaque:
+                    window.SystemBackdrop = null;
+                    // 强制 A=0xFF：主题 WindowFill 默认 alpha 0xF2（95%），"不透明"必须绝对实心
+                    if (root != null) root.Background = Solid(Opaque(t.WindowFill));
+                    break;
+
+                case TransparencyMode.Frosted:
+                    // 主题色作为染色层，磨砂明显：既保留主题色又透出背景（实测随背景亮度变化）
+                    var controller = WindowEffects.TryApplyAcrylicTinted(
+                        window, ToColor(t.WindowFill), tintOpacity: 0.70, luminosityOpacity: 0.55, thin: false);
+                    if (controller != null) _backdrops[window] = controller;
+                    // 根元素透明：染色交给 Acrylic 控制器，避免二次叠加变实
+                    if (root != null) root.Background = new SolidColorBrush(Colors.Transparent);
+                    break;
+
+                case TransparencyMode.BlackTransparent:
+                    // 黑色薄磨砂 + 极低染色：接近"纯透明"的黑色，桌面几乎原样透出
+                    var blackController = WindowEffects.TryApplyAcrylicTinted(
+                        window, Colors.Black, tintOpacity: 0.18, luminosityOpacity: 0.05, thin: true);
+                    if (blackController != null) _backdrops[window] = blackController;
+                    if (root != null) root.Background = new SolidColorBrush(Colors.Transparent);
+                    break;
+            }
+
+            // 诊断：确认实际生效的 backdrop 类型与平台支持情况（排查透明不生效时看这里）
+            var rootBg = (root?.Background as SolidColorBrush)?.Color;
+            App.Log($"透明度模式={mode} 原生控制器={(window.SystemBackdrop == null && _backdrops.ContainsKey(window) ? "已挂载" : "无")} " +
+                    $"mica支持={MicaController.IsSupported()} acrylic支持={DesktopAcrylicController.IsSupported()} " +
+                    $"根背景={rootBg?.ToString() ?? "n/a"}");
+        }
+        catch (Exception ex) { App.Log($"应用透明度模式失败: {ex.Message}"); }
+    }
+
+    /// <summary>释放窗口上已挂载的原生背景控制器（切模式 / 关窗时调用）。</summary>
+    private static void ReleaseBackdrop(Window window)
+    {
+        if (_backdrops.TryGetValue(window, out var controller))
+        {
+            _backdrops.Remove(window);
+            try { controller.Dispose(); }
+            catch (Exception ex) { App.Log($"释放背景控制器失败: {ex.Message}"); }
+        }
+        window.SystemBackdrop = null;
     }
 
     /// <summary>

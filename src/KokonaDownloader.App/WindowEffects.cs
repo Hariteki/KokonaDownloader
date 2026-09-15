@@ -213,6 +213,40 @@ public static class WindowEffects
         catch (Exception ex) { App.Log($"应用 Acrylic 失败: {ex.Message}"); return false; }
     }
 
+    /// <summary>
+    /// 可定制色调的 Acrylic 磨砂背景：透明度模式切换用。
+    /// tintOpacity 越大主题色越浓（背景越不明显），luminosityOpacity 控制明度层。
+    /// 返回实际生效的控制器（供切换模式时释放），失败返回 null。
+    /// </summary>
+    public static ISystemBackdropControllerWithTargets? TryApplyAcrylicTinted(
+        Window window,
+        Windows.UI.Color tintColor,
+        double tintOpacity,
+        double luminosityOpacity,
+        bool thin)
+    {
+        try
+        {
+            if (!DesktopAcrylicController.IsSupported())
+            {
+                App.Log("当前系统不支持 Acrylic 背景");
+                return null;
+            }
+
+            var controller = new DesktopAcrylicController
+            {
+                Kind = thin ? DesktopAcrylicKind.Thin : DesktopAcrylicKind.Base,
+                TintColor = tintColor,
+                TintOpacity = (float)Math.Clamp(tintOpacity, 0.0, 1.0),
+                LuminosityOpacity = (float)Math.Clamp(luminosityOpacity, 0.0, 1.0)
+            };
+            var config = new SystemBackdropConfiguration();
+            ConfigureForWindow(controller, window, config, null);
+            return controller;
+        }
+        catch (Exception ex) { App.Log($"应用半透明 Acrylic 失败: {ex.Message}"); return null; }
+    }
+
     private static void ConfigureForWindow(
         ISystemBackdropControllerWithTargets controller,
         Window window,

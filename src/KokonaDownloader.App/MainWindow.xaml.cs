@@ -6,6 +6,7 @@ using KokonaDownloader.App.ViewModels;
 using KokonaDownloader.Core;
 using KokonaDownloader.Core.Engine;
 using KokonaDownloader.Core.Notifications;
+using KokonaDownloader.Core.Settings;
 using KokonaDownloader.Core.Themes;
 using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Xaml;
@@ -113,9 +114,7 @@ public partial class MainWindow : Window
             AppWindow.Resize(new Windows.Graphics.SizeInt32((int)(940 * s), (int)(560 * s)));
         }
         catch (Exception ex) { App.Log($"设置初始窗口尺寸失败: {ex.Message}"); }
-        // 原生 Mica 磨砂背景（声明式 SystemBackdrop，生命周期与激活状态由框架托管，最可靠）
-        try { SystemBackdrop = new MicaBackdrop { Kind = MicaKind.BaseAlt }; }
-        catch (Exception ex) { App.Log($"应用 Mica 失败: {ex.Message}"); }
+        // 窗口背景与 SystemBackdrop 由 ThemeService.ApplyTransparency 统一管理（含透明度模式切换）
 
         _timer.Interval = TimeSpan.FromMilliseconds(900);
         _timer.Tick += async (_, _) => await RefreshAsync();
@@ -128,6 +127,7 @@ public partial class MainWindow : Window
         // 窗口激活后再应用一次，确保标题栏颜色在首帧之后生效
         Activated += (_, _) => ApplyTheme();
         BuildThemeMenu();
+        BuildTransparencyMenu();
 
         // 引擎事件：托盘进度 + 完成/失败通知（引擎轮询线程触发，需切回 UI 线程）
         if (App.Host != null)
@@ -397,6 +397,47 @@ public partial class MainWindow : Window
     {
         if (sender is MenuFlyoutItem { Tag: string id })
             ThemeService.SetThemeColor(id);
+    }
+
+    private void BuildTransparencyMenu()
+    {
+        var items = new (string Name, TransparencyMode Mode, string Glyph)[]
+        {
+            ("不透明", TransparencyMode.Opaque, "\uE7B3"),
+            ("磨砂透明", TransparencyMode.Frosted, "\uE790"),
+            ("黑色纯透明", TransparencyMode.BlackTransparent, "\uE70E"),
+        };
+        foreach (var (name, mode, glyph) in items)
+        {
+            var item = new MenuFlyoutItem { Text = name, Tag = mode };
+            item.Icon = new FontIcon { Glyph = glyph, FontSize = 14 };
+            item.Click += OnTransparencyMenuItemClick;
+            TransparencyMenu.Items.Add(item);
+        }
+        TransparencyMenu.Opening += (_, _) => RefreshTransparencyMenu();
+        RefreshTransparencyMenu();
+    }
+
+    private void RefreshTransparencyMenu()
+    {
+        var current = ThemeService.CurrentTransparency;
+        foreach (var i in TransparencyMenu.Items.OfType<MenuFlyoutItem>())
+        {
+            if (i.Tag is TransparencyMode mode)
+            {
+                i.Icon = new FontIcon
+                {
+                    Glyph = mode == current ? "\uE73E" : (mode == TransparencyMode.Opaque ? "\uE7B3" : mode == TransparencyMode.Frosted ? "\uE790" : "\uE70E"),
+                    FontSize = 14
+                };
+            }
+        }
+    }
+
+    private void OnTransparencyMenuItemClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuFlyoutItem { Tag: TransparencyMode mode })
+            ThemeService.SetTransparencyMode(mode);
     }
 
     private async Task RefreshAsync()

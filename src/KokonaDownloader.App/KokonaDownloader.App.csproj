@@ -19,13 +19,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- CsWinRT 源生成器（WASDK 1.8）生成的实例化代码含 unsafe，需显式允许 -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <!-- 版本号 1.0.5（合法 semver，直接用于 Version/InformationalVersion；
-         API /api/ping 返回的 Version 字符串亦为 1.0.5） -->
-    <Version>1.0.5</Version>
-    <!-- 程序集/文件版本必须为纯数字（Windows 要求 x.y.z.w），故固定 1.0.5.0 -->
-    <AssemblyVersion>1.0.5.0</AssemblyVersion>
-    <FileVersion>1.0.5.0</FileVersion>
-    <InformationalVersion>1.0.5</InformationalVersion>
+    <!-- 版本号 1.0.6（合法 semver，直接用于 Version/InformationalVersion；
+         API /api/ping 返回的 Version 字符串亦为 1.0.6） -->
+    <Version>1.0.6</Version>
+    <!-- 程序集/文件版本必须为纯数字（Windows 要求 x.y.z.w），故固定 1.0.6.0 -->
+    <AssemblyVersion>1.0.6.0</AssemblyVersion>
+    <FileVersion>1.0.6.0</FileVersion>
+    <InformationalVersion>1.0.6</InformationalVersion>
     <WindowsSdkPackageVersion>10.0.19041.38</WindowsSdkPackageVersion>
     <!-- PRI 固定为通用名 resources.pri（MRT 找不到 exe 派生名时的回退名），
          修复 WASDK 1.8+ 单文件应用 exe 改名后 ms-appx 解析失败启动即崩的问题

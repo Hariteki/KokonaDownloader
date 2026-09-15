@@ -600,6 +600,12 @@
                         <MenuFlyout x:Name="ThemeMenu" Placement="Bottom"/>
                     </Button.Flyout>
                 </Button>
+                <Button x:Name="BtnTransparency" ToolTipService.ToolTip="窗口透明度" AutomationProperties.Name="窗口透明度">
+                    <FontIcon Glyph="&#xE7B3;" FontSize="16"/>
+                    <Button.Flyout>
+                        <MenuFlyout x:Name="TransparencyMenu" Placement="Bottom"/>
+                    </Button.Flyout>
+                </Button>
                 <Button x:Name="BtnSettings" Click="OnSettingsClick" ToolTipService.ToolTip="设置" AutomationProperties.Name="设置">
                     <FontIcon Glyph="&#xE713;" FontSize="16"/>
                 </Button>
