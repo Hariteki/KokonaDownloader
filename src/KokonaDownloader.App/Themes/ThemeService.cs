@@ -95,6 +95,39 @@ public static class ThemeService
     public static TransparencyMode CurrentTransparency =>
         App.Host?.Settings.Current.Transparency ?? TransparencyMode.Opaque;
 
+    /// <summary>当前磨砂浓度（0=更透明 … 1=更不透明，仅 Frosted 模式生效）。</summary>
+    public static double CurrentFrostedStrength =>
+        Math.Clamp(App.Host?.Settings.Current.FrostedStrength ?? 0.5, 0.0, 1.0);
+
+    /// <summary>调整磨砂浓度（写设置 → 持久化 → Changed → 全窗口刷新）。</summary>
+    public static void SetFrostedStrength(double strength)
+    {
+        var v = Math.Clamp(strength, 0.0, 1.0);
+        App.Host?.Settings.Update(s =>
+        {
+            if (Math.Abs(s.FrostedStrength - v) < 0.005) return false;
+            s.FrostedStrength = v;
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// 磨砂浓度 → Acrylic 参数（分段线性，0.5 锚定原始观感）：
+    ///   0.0（更透明）  → tint 0.12 / luminosity 0.06
+    ///   0.5（原始观感）→ tint 0.70 / luminosity 0.55
+    ///   1.0（更不透明）→ tint 0.98 / luminosity 0.90
+    /// </summary>
+    public static (double Tint, double Luminosity) FrostedParams(double strength)
+    {
+        var v = Math.Clamp(strength, 0.0, 1.0);
+        if (v <= 0.5)
+            return Lerp((0.12, 0.06), (0.70, 0.55), v / 0.5);
+        return Lerp((0.70, 0.55), (0.98, 0.90), (v - 0.5) / 0.5);
+    }
+
+    private static (double, double) Lerp((double A, double B) from, (double A, double B) to, double t) =>
+        (from.A + (to.A - from.A) * t, from.B + (to.B - from.B) * t);
+
     public static void Register(Window window)
     {
         PruneWindows();
@@ -140,7 +173,8 @@ public static class ThemeService
     /// <summary>
     /// 按当前透明度模式设置窗口背景与原生 Acrylic 背景：
     ///  Opaque           → 无背景层 + 实心主题背景（完全不透明）
-    ///  Frosted          → 半透明主题色 + Acrylic 磨砂（能透出后面的桌面/窗口，带模糊）
+    ///  Frosted          → 半透明主题色 + Acrylic 磨砂（能透出后面的桌面/窗口，带模糊），
+    ///                     染色浓度由"磨砂浓度"滑块控制（FrostedStrength：更透明 ↔ 更不透明）
     ///  BlackTransparent → 黑色薄磨砂（最低不透明度，几乎全透明）
     ///
     /// 实现说明：XAML 的 MicaBackdrop/DesktopAcrylicBackdrop 在本机实测"设了但不透桌面"
@@ -168,9 +202,11 @@ public static class ThemeService
                     break;
 
                 case TransparencyMode.Frosted:
-                    // 主题色作为染色层，磨砂明显：既保留主题色又透出背景（实测随背景亮度变化）
+                    // 主题色作为染色层，磨砂明显：既保留主题色又透出背景（实测随背景亮度变化）。
+                    // 染色/明度浓度由用户"磨砂浓度"滑块控制（更透明 ↔ 更不透明）
+                    var (tint, lum) = FrostedParams(CurrentFrostedStrength);
                     var controller = WindowEffects.TryApplyAcrylicTinted(
-                        window, ToColor(t.WindowFill), tintOpacity: 0.70, luminosityOpacity: 0.55, thin: false);
+                        window, ToColor(t.WindowFill), tintOpacity: tint, luminosityOpacity: lum, thin: false);
                     if (controller != null) _backdrops[window] = controller;
                     // 根元素透明：染色交给 Acrylic 控制器，避免二次叠加变实
                     if (root != null) root.Background = new SolidColorBrush(Colors.Transparent);

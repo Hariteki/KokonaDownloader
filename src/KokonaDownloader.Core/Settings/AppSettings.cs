@@ -33,6 +33,11 @@ public sealed class AppSettings
     public string ThemeColorId { get; set; } = KokonaDownloader.Core.Themes.ThemeCatalog.SystemId;
     /// <summary>窗口透明度模式（Opaque / Frosted / BlackTransparent）。</summary>
     public TransparencyMode Transparency { get; set; } = TransparencyMode.Opaque;
+    /// <summary>
+    /// 磨砂浓度（仅 Frosted 模式生效）：0=更透明 … 1=更不透明，0.5=原始观感。
+    /// 映射到 Acrylic 染色/明度层不透明度（见 ThemeService.FrostedParams）。
+    /// </summary>
+    public double FrostedStrength { get; set; } = 0.5;
     public long GlobalSpeedLimit { get; set; }
     public bool LaunchAtStartup { get; set; }
     public bool MinimizeToTrayOnClose { get; set; } = true;

@@ -29,6 +29,11 @@ public partial class MainWindow : Window
     private string _filter = "all";
     private string _search = string.Empty;
     private bool _exiting;
+    /// <summary>透明度菜单里的"磨砂浓度"滑块与数值显示（仅 Frosted 模式启用）。</summary>
+    private Slider? _frostedSlider;
+    private TextBlock? _frostedValueText;
+    /// <summary>透明度菜单的模式行（按钮 + 图标，用于刷新对勾状态）。</summary>
+    private readonly List<(Button Btn, FontIcon Icon)> _modeRows = new();
     /// <summary>每个任务对应的进度小窗（IDM 式），任务结束后保留引用以便关闭。</summary>
     private readonly Dictionary<string, ProgressWindow> _progressWindows = new();
 
@@ -399,45 +404,126 @@ public partial class MainWindow : Window
             ThemeService.SetThemeColor(id);
     }
 
+    /// <summary>
+    /// 透明度菜单（普通 Flyout，非 MenuFlyout）：WinUI3 的 MenuFlyoutItem 无 Content 属性、
+    /// MenuFlyout.Items 只收 MenuFlyoutItemBase，塞不进滑块等自定义控件，故整块内容代码构建。
+    /// 三个模式行（仿菜单项按钮）+ 磨砂浓度滑块（仅磨砂模式启用）。
+    /// </summary>
     private void BuildTransparencyMenu()
     {
+        var root = new StackPanel { MinWidth = 200, Padding = new Thickness(0, 6, 0, 6) };
+
         var items = new (string Name, TransparencyMode Mode, string Glyph)[]
         {
             ("不透明", TransparencyMode.Opaque, "\uE7B3"),
             ("磨砂透明", TransparencyMode.Frosted, "\uE790"),
             ("黑色纯透明", TransparencyMode.BlackTransparent, "\uE70E"),
         };
+        var rowStyle = (Style)RootGrid.Resources["TransparencyMenuItemStyle"];
+        // WinUI3 模板不支持 Triggers：悬停高亮用代码切换 Background（模板 Border 经 TemplateBinding 跟随）
+        var hoverBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(0x1A, 0xFF, 0xFF, 0xFF));
+        var clearBrush = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         foreach (var (name, mode, glyph) in items)
         {
-            var item = new MenuFlyoutItem { Text = name, Tag = mode };
-            item.Icon = new FontIcon { Glyph = glyph, FontSize = 14 };
-            item.Click += OnTransparencyMenuItemClick;
-            TransparencyMenu.Items.Add(item);
+            var icon = new FontIcon { Glyph = glyph, FontSize = 14, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+            var text = new TextBlock { Text = name, FontSize = 14, VerticalAlignment = VerticalAlignment.Center };
+            var rowContent = new StackPanel { Orientation = Orientation.Horizontal };
+            rowContent.Children.Add(icon);
+            rowContent.Children.Add(text);
+            var btn = new Button { Content = rowContent, Tag = mode, Style = rowStyle };
+            btn.PointerEntered += (_, _) => btn.Background = hoverBrush;
+            btn.PointerExited += (_, _) => btn.Background = clearBrush;
+            btn.Click += OnTransparencyMenuItemClick;
+            _modeRows.Add((btn, icon));
+            root.Children.Add(btn);
         }
-        TransparencyMenu.Opening += (_, _) => RefreshTransparencyMenu();
+
+        // 分隔线
+        root.Children.Add(new Border
+        {
+            Height = 1,
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x29, 0xFF, 0xFF, 0xFF)),
+            Margin = new Thickness(12, 8, 12, 0)
+        });
+
+        // 磨砂浓度滑块：仅"磨砂透明"模式生效，拖动即时生效并持久化（更透明 ↔ 更不透明）
+        _frostedValueText = new TextBlock { FontSize = 12, Opacity = 0.75, HorizontalAlignment = HorizontalAlignment.Right };
+        var header = new Grid { Margin = new Thickness(14, 8, 14, 0) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var title = new TextBlock { Text = "磨砂浓度", FontSize = 13, VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetColumn(title, 0);
+        Grid.SetColumn(_frostedValueText, 1);
+        header.Children.Add(title);
+        header.Children.Add(_frostedValueText);
+
+        _frostedSlider = new Slider
+        {
+            Minimum = 0,
+            Maximum = 1,
+            StepFrequency = 0.01,
+            Margin = new Thickness(14, 2, 14, 0),
+            IsEnabled = false
+        };
+        _frostedSlider.ValueChanged += OnFrostedStrengthChanged;
+
+        var labels = new Grid { Margin = new Thickness(14, 0, 14, 8) };
+        labels.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        labels.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var leftLabel = new TextBlock { Text = "更透明", FontSize = 11, Opacity = 0.6 };
+        var rightLabel = new TextBlock { Text = "更不透明", FontSize = 11, Opacity = 0.6, HorizontalAlignment = HorizontalAlignment.Right };
+        Grid.SetColumn(rightLabel, 1);
+        labels.Children.Add(leftLabel);
+        labels.Children.Add(rightLabel);
+
+        root.Children.Add(header);
+        root.Children.Add(_frostedSlider);
+        root.Children.Add(labels);
+
+        TransparencyFlyout.Content = root;
+        TransparencyFlyout.Opening += (_, _) => RefreshTransparencyMenu();
         RefreshTransparencyMenu();
     }
 
     private void RefreshTransparencyMenu()
     {
         var current = ThemeService.CurrentTransparency;
-        foreach (var i in TransparencyMenu.Items.OfType<MenuFlyoutItem>())
+        foreach (var (btn, icon) in _modeRows)
         {
-            if (i.Tag is TransparencyMode mode)
-            {
-                i.Icon = new FontIcon
-                {
-                    Glyph = mode == current ? "\uE73E" : (mode == TransparencyMode.Opaque ? "\uE7B3" : mode == TransparencyMode.Frosted ? "\uE790" : "\uE70E"),
-                    FontSize = 14
-                };
-            }
+            if (btn.Tag is TransparencyMode mode)
+                icon.Glyph = mode == current ? "\uE73E" : (mode == TransparencyMode.Opaque ? "\uE7B3" : mode == TransparencyMode.Frosted ? "\uE790" : "\uE70E");
+        }
+
+        // 磨砂浓度滑块：仅磨砂模式可拖动；数值与设置同步
+        if (_frostedSlider != null)
+        {
+            _frostedSlider.IsEnabled = current == TransparencyMode.Frosted;
+            var v = ThemeService.CurrentFrostedStrength;
+            if (Math.Abs(_frostedSlider.Value - v) > 0.001)
+                _frostedSlider.Value = v;
+            UpdateFrostedValueText(v);
         }
     }
 
     private void OnTransparencyMenuItemClick(object sender, RoutedEventArgs e)
     {
-        if (sender is MenuFlyoutItem { Tag: TransparencyMode mode })
+        if (sender is Button { Tag: TransparencyMode mode })
             ThemeService.SetTransparencyMode(mode);
+    }
+
+    /// <summary>磨砂浓度滑块拖动：即时生效（写设置 → 全窗口重刷 Acrylic 参数）。</summary>
+    private void OnFrostedStrengthChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    {
+        var v = e.NewValue;
+        if (Math.Abs(v - ThemeService.CurrentFrostedStrength) < 0.005) return; // 未变化（含初始化同步）
+        ThemeService.SetFrostedStrength(v);
+        UpdateFrostedValueText(v);
+    }
+
+    private void UpdateFrostedValueText(double v)
+    {
+        if (_frostedValueText != null)
+            _frostedValueText.Text = $"{(int)Math.Round(v * 100)}%";
     }
 
     private async Task RefreshAsync()

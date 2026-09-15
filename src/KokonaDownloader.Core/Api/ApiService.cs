@@ -82,6 +82,8 @@ public sealed class ApiSettingsPatch
     [JsonPropertyName("theme")] public string? Theme { get; set; }
     /// <summary>窗口透明度模式："opaque" / "frosted" / "blacktransparent"（大小写不敏感）。</summary>
     [JsonPropertyName("transparency")] public string? Transparency { get; set; }
+    /// <summary>磨砂浓度 0~1（仅 frosted 模式生效：0=更透明，1=更不透明，0.5=默认观感）。</summary>
+    [JsonPropertyName("frostedStrength")] public double? FrostedStrength { get; set; }
     [JsonPropertyName("globalSpeedLimit")] public long? GlobalSpeedLimit { get; set; }
     [JsonPropertyName("interceptBrowserDownloads")] public bool? InterceptBrowserDownloads { get; set; }
     [JsonPropertyName("minimizeToTrayOnClose")] public bool? MinimizeToTrayOnClose { get; set; }
@@ -219,6 +221,7 @@ public sealed class ApiService : IDisposable
                     notificationsEnabled = _settings.Current.NotificationsEnabled,
                     theme = _settings.Current.Theme.ToString(),
                     transparency = _settings.Current.Transparency.ToString().ToLowerInvariant(),
+                    frostedStrength = _settings.Current.FrostedStrength,
                     globalSpeedLimit = _settings.Current.GlobalSpeedLimit,
                     interceptBrowserDownloads = _settings.Current.InterceptBrowserDownloads,
                     minimizeToTrayOnClose = _settings.Current.MinimizeToTrayOnClose
@@ -390,6 +393,7 @@ public sealed class ApiService : IDisposable
                 if (patch.NotificationsEnabled.HasValue) s.NotificationsEnabled = patch.NotificationsEnabled.Value;
                 if (patch.Theme != null && Enum.TryParse<ThemeMode>(patch.Theme, true, out var theme)) s.Theme = theme;
                 if (patch.Transparency != null && Enum.TryParse<TransparencyMode>(patch.Transparency, true, out var transparency)) s.Transparency = transparency;
+                if (patch.FrostedStrength is >= 0 and <= 1) s.FrostedStrength = patch.FrostedStrength.Value;
                 if (patch.GlobalSpeedLimit is >= 0) s.GlobalSpeedLimit = patch.GlobalSpeedLimit!.Value;
                 if (patch.InterceptBrowserDownloads.HasValue) s.InterceptBrowserDownloads = patch.InterceptBrowserDownloads.Value;
                 if (patch.MinimizeToTrayOnClose.HasValue) s.MinimizeToTrayOnClose = patch.MinimizeToTrayOnClose.Value;
