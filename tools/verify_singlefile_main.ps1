@@ -71,19 +71,20 @@ function Probe-Launch {
     return @{ Process = $p; SplashSeen = $splashSeen }
 }
 
-# ════ 构建验证：exe 内嵌 12 个 standalone/ 资源 ════
+# ════ 构建验证：exe 内嵌 13 个 standalone/ 资源（含 v1.0.6 新增的 SplashWindow.xbf）════
 Write-Host "=== build embed check ==="
 $bytes = [System.IO.File]::ReadAllBytes("$dist\$exeName")
 $text = [System.Text.Encoding]::ASCII.GetString($bytes)
 $names = @("standalone/App.xbf","standalone/BtPieceGrid.xbf","standalone/MagnetConfirmWindow.xbf",
           "standalone/MainWindow.xbf","standalone/NewDownloadDialog.xbf","standalone/ProgressWindow.xbf",
-          "standalone/SettingsWindow.xbf","standalone/Themes/ThemeSwatchPicker.xbf",
+          "standalone/SettingsWindow.xbf","standalone/SplashWindow.xbf",
+          "standalone/Themes/ThemeSwatchPicker.xbf",
           "standalone/resources.pri","standalone/aria2c.exe","standalone/icons/tray.ico","standalone/icons/tray.png")
 $missing = 0
 foreach ($n in $names) {
     if ($text.Contains($n)) { Write-Host ("  OK   " + $n) } else { Write-Host ("  MISS " + $n); $missing++ }
 }
-if ($missing -eq 0) { Write-Host "PASS: 12/12 embedded resources present" } else { Write-Host "FAIL: $missing missing" }
+if ($missing -eq 0) { Write-Host "PASS: 13/13 embedded resources present" } else { Write-Host "FAIL: $missing missing" }
 
 # ════ 测试 A：干净临时目录，只放 exe（含 B.1 splash 复测）════
 Write-Host ""
@@ -100,9 +101,10 @@ $ping = Test-Ping
 Write-Host ("ping: " + $ping)
 if ($null -ne $ping -and $ping -match '"version":"1\.0\.6"') { Write-Host "PASS: ping 200 version 1.0.6" } else { Write-Host "FAIL: ping missing or wrong version" }
 
-$filesA = Get-ChildItem $dirA -File
-Write-Host ("files next to exe after launch: " + $filesA.Count)
-if ($filesA.Count -ge 12) { Write-Host "PASS: payload extracted (>=12 files)" } else { Write-Host "FAIL: only $($filesA.Count) files" }
+# 载荷含子目录（icons\、Themes\），必须递归统计；排除 exe 自身 → 期望 13 个载荷文件
+$payload = @(Get-ChildItem $dirA -Recurse -File | Where-Object { $_.Name -ne $exeName })
+Write-Host ("payload files next to exe (recursive, excl. exe): " + $payload.Count)
+if ($payload.Count -ge 13) { Write-Host "PASS: payload extracted (>=13 files)" } else { Write-Host "FAIL: only $($payload.Count) files" }
 
 $log = Get-Content "$env:APPDATA\KokonaDownloader\app.log" -Tail 40 -ErrorAction SilentlyContinue
 if ($log | Select-String "XamlParseException") { Write-Host "FAIL: XamlParseException in log" } else { Write-Host "PASS: no XamlParseException in recent log" }
