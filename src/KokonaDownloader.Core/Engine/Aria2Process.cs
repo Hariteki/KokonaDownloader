@@ -58,7 +58,10 @@ public sealed class Aria2Process : IDisposable
             "--log-level=warn",
             "--summary-interval=0",
             "--console-log-level=warn",
-            "--quiet=false"
+            "--quiet=false",
+            // 关掉控制台读数刷新：它会每秒往 stdout 打一行（内容基本是空白/进度条残影），
+            // 被重定向进 app.log 后占全部行数的 96%（实测 44 MB / 64 万行），纯属噪声。
+            "--show-console-readout=false"
         };
         if (_config.GlobalSpeedLimit > 0)
             args = args.Append($"--max-overall-download-limit={_config.GlobalSpeedLimit}").ToArray();

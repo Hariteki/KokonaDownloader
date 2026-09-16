@@ -57,11 +57,13 @@ public class ExtensionContractTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        _http.Dispose();
-        _api.Dispose();
-        await _engine.DisposeAsync();
-        _fileServer.Dispose();
-        try { Directory.Delete(_workDir, true); } catch { }
+        // InitializeAsync 中途失败时（如高负载下 aria2 15s 未就绪）后面的字段还是 null：
+        // 必须逐项判空清理，否则 NRE 会中断清理 → 引擎轮询循环留在测试进程里、aria2 泄漏。
+        try { _http?.Dispose(); } catch { }
+        try { _api?.Dispose(); } catch { }
+        if (_engine != null) { try { await _engine.DisposeAsync(); } catch { } }
+        try { _fileServer?.Dispose(); } catch { }
+        try { if (_workDir != null) Directory.Delete(_workDir, true); } catch { }
     }
 
     /// <summary>模拟扩展 forwardDownload：POST /api/download，带 X-Kokona-Secret 头，

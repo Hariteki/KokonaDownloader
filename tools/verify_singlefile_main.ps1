@@ -33,7 +33,9 @@ public class WinProbe3 {
 
 $dist = "D:\Project\kokonaDown\dist\KokonaSingleFile"
 $exeName = "KokonaDownloader.exe"
-$secret = "a938ca540c347dbdcaf263fe86250661"
+# 注意：/api/ping 是唯一免鉴权端点，这里不需要密钥。
+# 早期版本把用户真实的 ApiSecret 硬编码在此并随仓库推送（已移除）；
+# 需要鉴权的探测请从 %APPDATA%\KokonaDownloader\settings.json 读取 apiSecret，不要写死在脚本里。
 
 function Stop-App {
     Get-Process KokonaDownloader -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -44,7 +46,7 @@ function Test-Ping {
     param([int]$tries = 60)
     for ($i = 0; $i -lt $tries; $i++) {
         try {
-            $r = Invoke-WebRequest -Uri "http://127.0.0.1:16800/api/ping" -Headers @{ "X-Kokona-Secret" = $secret } -UseBasicParsing -TimeoutSec 2
+            $r = Invoke-WebRequest -Uri "http://127.0.0.1:16800/api/ping" -UseBasicParsing -TimeoutSec 2
             if ($r.StatusCode -eq 200) { return $r.Content }
         } catch {}
         Start-Sleep -Milliseconds 500

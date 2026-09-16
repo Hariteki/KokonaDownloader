@@ -21,6 +21,12 @@ public sealed class AppHost : IAsyncDisposable
     private readonly string _aria2Path;
     private bool _started;
 
+    /// <summary>tracker 列表的内存缓存：避免每次设置变更都去读 trackers.json。</summary>
+    private string? _cachedTrackers;
+    /// <summary>上一次真正下发给引擎的值：只有相关字段变了才发 RPC（见 OnSettingsChanged）。</summary>
+    private long _appliedSpeedLimit;
+    private string _appliedTrackers = string.Empty;
+
     public AppHost(string aria2Path, SettingsStore settings, Action<string>? log = null)
     {
         _aria2Path = aria2Path;
@@ -29,8 +35,14 @@ public sealed class AppHost : IAsyncDisposable
 
         TaskStore = new TaskStore(AppPaths.TasksFile);
         Notified = new NotifiedStore(AppPaths.NotifiedFile);
+        _cachedTrackers = LoadCachedTrackers();
         Engine = new DownloadEngine(BuildEngineConfig(), TaskStore, Log);
         Api = new ApiService(Engine, Settings, settings.Current.ApiPort, Log);
+
+        // 引擎启动时已通过 EngineConfig 拿到这些值，记下来作为"已下发"基线，
+        // 这样第一次设置变更不会被误判成需要重新下发。
+        _appliedSpeedLimit = settings.Current.GlobalSpeedLimit;
+        _appliedTrackers = _cachedTrackers ?? string.Empty;
 
         // 设置变化时同步引擎
         Settings.Changed += OnSettingsChanged;
@@ -54,21 +66,35 @@ public sealed class AppHost : IAsyncDisposable
             BtSeedEnabled = s.BtSeedEnabled,
             SeedRatio = s.SeedRatio,
             SeedTimeMinutes = s.SeedTimeMinutes,
-            BtTrackers = LoadCachedTrackers()
+            BtTrackers = _cachedTrackers
         };
     }
 
+    /// <summary>
+    /// 设置变更 → 引擎热更新。**只下发真正变化的字段**：
+    /// 历史上这里对每次 Changed 都无条件下发全局限速与 tracker 两条 RPC，
+    /// 于是切换主题色、拖动磨砂浓度滑块这类与引擎无关的操作也会各打两次 aria2 调用。
+    /// </summary>
     private async void OnSettingsChanged(object? sender, EventArgs e)
     {
         try
         {
+            var s = Settings.Current;
+
             // 全局限速可热更新
-            await Engine.SetGlobalSpeedLimitAsync(Settings.Current.GlobalSpeedLimit).ConfigureAwait(false);
-            // tracker 开关/列表变化时热更新引擎
-            if (Settings.Current.BtEnabled && Settings.Current.BtTrackersEnabled)
-                await Engine.SetBtTrackersAsync(LoadCachedTrackers()).ConfigureAwait(false);
-            else
-                await Engine.SetBtTrackersAsync(string.Empty).ConfigureAwait(false);
+            if (s.GlobalSpeedLimit != _appliedSpeedLimit)
+            {
+                _appliedSpeedLimit = s.GlobalSpeedLimit;
+                await Engine.SetGlobalSpeedLimitAsync(s.GlobalSpeedLimit).ConfigureAwait(false);
+            }
+
+            // tracker 开关/列表变化时热更新引擎（读内存缓存，不再每次读盘）
+            var trackers = s.BtEnabled && s.BtTrackersEnabled ? (_cachedTrackers ?? string.Empty) : string.Empty;
+            if (!string.Equals(trackers, _appliedTrackers, StringComparison.Ordinal))
+            {
+                _appliedTrackers = trackers;
+                await Engine.SetBtTrackersAsync(trackers).ConfigureAwait(false);
+            }
         }
         catch (Exception ex) { Log($"同步设置失败: {ex.Message}"); }
     }
@@ -122,8 +148,15 @@ public sealed class AppHost : IAsyncDisposable
             var dir = Path.GetDirectoryName(AppPaths.TrackersFile);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             File.WriteAllText(AppPaths.TrackersFile, System.Text.Json.JsonSerializer.Serialize(trackers));
+
+            // 先更新内存缓存与"已下发"基线，再写设置：这样 Settings.Update 触发的
+            // OnSettingsChanged 不会把同一份 tracker 再下发一遍。
+            var joined = string.Join(",", trackers);
+            _cachedTrackers = joined;
+            _appliedTrackers = joined;
+
             Settings.Update(s => { s.BtTrackersUpdatedAt = DateTime.Now; return true; });
-            await Engine.SetBtTrackersAsync(string.Join(",", trackers)).ConfigureAwait(false);
+            await Engine.SetBtTrackersAsync(joined).ConfigureAwait(false);
             Log($"BT tracker 列表已更新（{trackers.Count} 条）");
         }
         catch (Exception ex) { Log($"更新 BT tracker 列表失败（使用缓存）: {ex.Message}"); }

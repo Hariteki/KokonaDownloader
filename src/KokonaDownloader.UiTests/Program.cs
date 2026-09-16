@@ -47,6 +47,11 @@ internal static class Program
         Console.WriteLine($"[环境] 应用 {appExe}");
 
         KillExistingApp();
+        // aria2.session 里是用户"未完成任务"的断点续传状态，删掉就再也回不来：
+        // 先整份备份，结束时原样还原（历史上这里直接删除且不还原）。
+        var sessionFile = Path.Combine(AppPaths.EngineWorkDir, "aria2.session");
+        var sessionBackup = File.Exists(sessionFile) ? File.ReadAllBytes(sessionFile) : null;
+        var sessionExisted = sessionBackup != null;
         CleanEngineSession();
 
         var work = TestEnv.NewWorkDir();
@@ -187,6 +192,21 @@ internal static class Program
             catch (Exception ex) { Console.WriteLine($"[WARN] 恢复设置失败: {ex.Message}"); }
             try { if (torrent != null) CleanTaskRecords(torrent.InfoHashHex); }
             catch (Exception ex) { Console.WriteLine($"[WARN] 清理任务记录失败: {ex.Message}"); }
+            try
+            {
+                if (sessionExisted && sessionBackup != null)
+                {
+                    Directory.CreateDirectory(AppPaths.EngineWorkDir);
+                    File.WriteAllBytes(sessionFile, sessionBackup);
+                    Console.WriteLine($"[OK] 已还原用户 aria2 会话文件（{sessionBackup.Length} B）");
+                }
+                else if (!sessionExisted && File.Exists(sessionFile))
+                {
+                    File.Delete(sessionFile);
+                    Console.WriteLine("[OK] 用户原本无会话文件，已删除测试产生的会话文件");
+                }
+            }
+            catch (Exception ex) { Console.WriteLine($"[WARN] 还原会话文件失败: {ex.Message}"); }
             try { Directory.Delete(work, true); } catch { }
         }
     }

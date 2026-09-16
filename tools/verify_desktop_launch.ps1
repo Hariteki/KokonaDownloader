@@ -1,4 +1,4 @@
-# Test D: launch from the user's actual desktop location (single-file folder) and verify splash + API
+﻿# Test D: launch from the user's actual desktop location (single-file folder) and verify splash + API
 Add-Type @'
 using System;
 using System.Collections.Generic;
@@ -31,7 +31,9 @@ public class WinProbe4 {
 }
 '@
 
-$secret = "a938ca540c347dbdcaf263fe86250661"
+# /api/ping is the only unauthenticated endpoint, so no secret is needed here.
+# (An earlier revision hardcoded the user's real ApiSecret in this file and shipped it
+#  to the public repo; removed. Read apiSecret from settings.json if a call needs auth.)
 $exe = "C:\Users\lumin\Desktop\KokonaSingleFile\KokonaDownloader.exe"
 
 Get-Process KokonaDownloader -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -57,7 +59,7 @@ if ($splashSeen) { Write-Host "PASS: splash visible from desktop launch" } else 
 $ping = $null
 for ($i = 0; $i -lt 60; $i++) {
     try {
-        $r = Invoke-WebRequest -Uri "http://127.0.0.1:16800/api/ping" -Headers @{ "X-Kokona-Secret" = $secret } -UseBasicParsing -TimeoutSec 2
+        $r = Invoke-WebRequest -Uri "http://127.0.0.1:16800/api/ping" -UseBasicParsing -TimeoutSec 2
         if ($r.StatusCode -eq 200) { $ping = $r.Content; break }
     } catch {}
     Start-Sleep -Milliseconds 500

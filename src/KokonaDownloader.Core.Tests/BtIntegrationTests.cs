@@ -84,10 +84,11 @@ public class BtIntegrationTests : IAsyncLifetime
         Assert.True(added.IsBt);
 
         var bitFieldSeen = false;
+        // 直接添加 .torrent 没有元数据阶段：真实任务就是 add 返回的 gid，按 gid 匹配
         var final = await PollBtTaskAsync(engine, added.Gid, fx.Torrent.Name,
             t => t.State == TaskState.Completed,
             t => { if (t.BitField != null) bitFieldSeen = true; },
-            timeoutMs: 90_000);
+            timeoutMs: 90_000, expectFollowedBy: false);
 
         Assert.Equal(TaskState.Completed, final.State);   // seed-time=0 → 完成即 Completed，不进入 Seeding
         Assert.True(final.IsBt);
@@ -223,23 +224,35 @@ public class BtIntegrationTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// 按谓词轮询 BT 任务：优先匹配真实任务（磁力两阶段派生的新 gid），元数据阶段回退按初始 gid 匹配。
-    /// 元数据任务完成后会短暂以 Completed 状态留在 tellStopped（引擎随后才移除），若优先匹配它
-    /// 会与 followedBy 处理产生竞态而误判完成，故真实任务永远优先。
+    /// 按谓词轮询 BT 任务。
+    ///
+    /// 磁力是两阶段：addUri 返回的是 <c>[METADATA]</c> 元数据任务的 gid，真实任务由 followedBy 派生（**gid 不同**）。
+    /// 元数据任务在拿到元数据后同样会上报 Completed 并短暂留在 tellStopped（引擎随后才移除它），
+    /// 而此时它的 <c>bittorrent.info.name</c> 已等于种子名、<c>numPieces</c> 仍是 1。
+    /// 历史实现"真实任务找不到就回退按 gid 匹配"，会在这个窗口里把**元数据任务**当成结果返回，
+    /// 于是 `NumPieces == 16` 之类的断言随机失败（4 次全量运行中失败 2 次）。
+    ///
+    /// 因此：磁力用例（<paramref name="expectFollowedBy"/>=true）**只认真实任务**，绝不回退；
+    /// 直接添加 .torrent 的用例没有元数据阶段，真实任务就是 add 返回的那个 gid，才允许按 gid 匹配。
     /// </summary>
     private static async Task<DownloadTaskInfo> PollBtTaskAsync(
         DownloadEngine engine, string metaGid, string torrentName,
-        Func<DownloadTaskInfo, bool> done, Action<DownloadTaskInfo>? observe = null, int timeoutMs = 60_000)
+        Func<DownloadTaskInfo, bool> done, Action<DownloadTaskInfo>? observe = null, int timeoutMs = 60_000,
+        bool expectFollowedBy = true)
     {
         var deadline = DateTime.Now.AddMilliseconds(timeoutMs);
         DownloadTaskInfo? last = null;
         while (DateTime.Now < deadline)
         {
             var tasks = await engine.GetAllTasksAsync();
-            last = tasks.FirstOrDefault(t => t.Gid != metaGid && t.IsBt && t.Name == torrentName)
-                   ?? tasks.FirstOrDefault(t => t.Gid == metaGid);
-            if (last != null) observe?.Invoke(last);
-            if (last != null && done(last)) return last;
+            var real = tasks.FirstOrDefault(t => t.Gid != metaGid && t.IsBt && t.Name == torrentName)
+                       ?? (expectFollowedBy ? null : tasks.FirstOrDefault(t => t.Gid == metaGid));
+            last = real;
+            if (real != null)
+            {
+                observe?.Invoke(real);
+                if (done(real)) return real;
+            }
             await Task.Delay(300);
         }
         throw new TimeoutException($"BT 任务未在 {timeoutMs}ms 内达到预期状态。当前快照: {Describe(last)}");

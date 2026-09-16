@@ -88,8 +88,12 @@ public static class BtHashUtil
         if (!int.TryParse(Encoding.ASCII.GetString(d, pos, p - pos), out var l) || l < 0) return false;
         start = p + 1;
         len = l;
+        // 必须先做上界校验再算 pos：长度前缀接近 int.MaxValue 时 start + l 会溢出成负数，
+        // 之后 "pos <= d.Length" 反而成立，调用方就会以负下标访问数组
+        // （用户提供的畸形 .torrent 可触发 IndexOutOfRangeException）。
+        if (l > d.Length - start) return false;
         pos = start + l;
-        return pos <= d.Length;
+        return true;
     }
 
     /// <summary>跳过一个任意类型的 bencode 值。</summary>

@@ -38,9 +38,10 @@ public class EngineIntegrationTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        await _engine.DisposeAsync();
-        _server.Dispose();
-        try { Directory.Delete(_workDir, true); } catch { }
+        // InitializeAsync 中途失败时字段可能为 null：逐项判空清理，避免 NRE 中断清理导致 aria2 泄漏。
+        if (_engine != null) { try { await _engine.DisposeAsync(); } catch { } }
+        try { _server?.Dispose(); } catch { }
+        try { if (_workDir != null) Directory.Delete(_workDir, true); } catch { }
     }
 
     [Fact]

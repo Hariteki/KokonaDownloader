@@ -1,7 +1,7 @@
 ﻿# 单文件 exe 只读目录回退验证（测试 C）：icacls 拒绝写 → 应回退 %LOCALAPPDATA%\KokonaDownloader\Standalone 并重新拉起
 $dist = "D:\Project\kokonaDown\dist\KokonaSingleFile"
 $exeName = "KokonaDownloader.exe"
-$secret = "a938ca540c347dbdcaf263fe86250661"
+# /api/ping 免鉴权，无需密钥；需要鉴权的探测请从 settings.json 读 apiSecret（不要写死在脚本里）
 $fallback = Join-Path $env:LOCALAPPDATA "KokonaDownloader\Standalone"
 if (-not (Test-Path "$dist\$exeName")) { Write-Host "FAIL: dist exe missing: $dist"; exit 1 }
 
@@ -14,7 +14,7 @@ function Test-Ping {
     param([int]$tries = 60)
     for ($i = 0; $i -lt $tries; $i++) {
         try {
-            $r = Invoke-WebRequest -Uri "http://127.0.0.1:16800/api/ping" -Headers @{ "X-Kokona-Secret" = $secret } -UseBasicParsing -TimeoutSec 2
+            $r = Invoke-WebRequest -Uri "http://127.0.0.1:16800/api/ping" -UseBasicParsing -TimeoutSec 2
             if ($r.StatusCode -eq 200) { return $r.Content }
         } catch {}
         Start-Sleep -Milliseconds 500

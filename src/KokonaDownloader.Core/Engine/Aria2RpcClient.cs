@@ -161,6 +161,26 @@ public sealed class Aria2RpcClient : IDisposable
     public async Task<List<Aria2TaskStatus>> TellStoppedAsync(int offset = 0, int num = 1000, CancellationToken ct = default)
         => DeserializeList(await CallAsync("aria2.tellStopped", new object?[] { offset, num }, ct).ConfigureAwait(false));
 
+    /// <summary>
+    /// 一次 multicall 拿齐 active / waiting / stopped 三份列表。
+    /// 等价于三次独立调用，但只花**一次 HTTP 往返**——界面每秒刷新列表、下载前做重复预检都走它，
+    /// 是本项目最主要的周期性 RPC 开销来源。
+    /// </summary>
+    public async Task<(List<Aria2TaskStatus> Active, List<Aria2TaskStatus> Waiting, List<Aria2TaskStatus> Stopped)> TellAllAsync(
+        int offset = 0, int num = 1000, CancellationToken ct = default)
+    {
+        var results = await MultiCallAsync(new (string, object?[])[]
+        {
+            ("aria2.tellActive", Array.Empty<object?>()),
+            ("aria2.tellWaiting", new object?[] { offset, num }),
+            ("aria2.tellStopped", new object?[] { offset, num })
+        }, ct).ConfigureAwait(false);
+
+        return (DeserializeList(results.ElementAtOrDefault(0)),
+                DeserializeList(results.ElementAtOrDefault(1)),
+                DeserializeList(results.ElementAtOrDefault(2)));
+    }
+
     public async Task<GlobalStat> GetGlobalStatAsync(CancellationToken ct = default)
     {
         var node = await CallAsync("aria2.getGlobalStat", ct: ct).ConfigureAwait(false);

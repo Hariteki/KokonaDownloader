@@ -37,6 +37,18 @@ public partial class MainWindow : Window
     /// <summary>每个任务对应的进度小窗（IDM 式），任务结束后保留引用以便关闭。</summary>
     private readonly Dictionary<string, ProgressWindow> _progressWindows = new();
 
+    /// <summary>同时存在的进度小窗上限：每个窗口约 88 个句柄 / 3.3 MB，
+    /// 无上限时"扩展连发 200 个链接"实测会造成 18 000 句柄 / 729 MB 内存与满屏弹窗。</summary>
+    private const int MaxLiveProgressWindows = 6;
+    /// <summary>突发限流：一个窗口期内最多新建几个小窗（批量任务不刷屏）。</summary>
+    private const int MaxNewWindowsPerBurst = 3;
+    private static readonly TimeSpan WindowBurstInterval = TimeSpan.FromSeconds(5);
+    private readonly Queue<DateTime> _recentWindowCreations = new();
+
+    /// <summary>引擎最近一次轮询推送的快照与统计（StatsUpdated 事件写入，界面刷新时直接渲染）。</summary>
+    private volatile List<DownloadTaskInfo>? _snapshot;
+    private volatile GlobalStat? _stats;
+
     /// <summary>悬停投影只在首帧模板实例化后挂载一次。</summary>
     private bool _shadowsAttached;
 
@@ -207,6 +219,9 @@ public partial class MainWindow : Window
         switch (e.Type)
         {
             case "StatsUpdated" when e.Tasks != null:
+                // 引擎每次轮询都会推送全量快照：界面与托盘共用它，各自不再单独轮询
+                _snapshot = e.Tasks;
+                _stats = e.Stats;
                 var progress = TrayProgress.Compute(e.Tasks);
                 DispatcherQueue.TryEnqueue(() => App.Tray?.Update(progress));
                 break;
@@ -238,6 +253,7 @@ public partial class MainWindow : Window
             if (!isNewTask) return;
             if (!_progressWindows.ContainsKey(t.Gid))
             {
+                if (!ShouldCreateProgressWindow(t.Gid)) return;
                 try
                 {
                     var win = new ProgressWindow(t.Gid, t.Name, t.IsBt);
@@ -261,6 +277,48 @@ public partial class MainWindow : Window
             }
         }
         // Completed/Failed：小窗自身轮询会停在完成态并显示"打开文件夹"，不自动关闭
+    }
+
+    /// <summary>
+    /// 进度小窗配额判定：批量任务不再"一个任务一个窗口"地无限弹出。
+    /// 规则（先限流、再腾位、腾不出才放弃）：
+    ///  1. 突发限流：<see cref="WindowBurstInterval"/> 内最多新建 <see cref="MaxNewWindowsPerBurst"/> 个（扩展连发/批量粘贴不刷屏）；
+    ///  2. 存活窗口已达 <see cref="MaxLiveProgressWindows"/>：优先回收**最旧的已结束窗口**腾出位置；
+    ///  3. 存活的全是进行中窗口：本次不新建（任务本身照常在主列表/托盘里可见）。
+    /// </summary>
+    private bool ShouldCreateProgressWindow(string gid)
+    {
+        var now = DateTime.UtcNow;
+        while (_recentWindowCreations.Count > 0 && now - _recentWindowCreations.Peek() > WindowBurstInterval)
+            _recentWindowCreations.Dequeue();
+
+        if (_recentWindowCreations.Count >= MaxNewWindowsPerBurst)
+        {
+            App.Log($"[ui] 进度小窗突发限流，跳过 gid={gid}（{WindowBurstInterval.TotalSeconds:0}s 内已开 {MaxNewWindowsPerBurst} 个）");
+            return false;
+        }
+
+        while (_progressWindows.Count >= MaxLiveProgressWindows)
+        {
+            var staleGid = _progressWindows
+                .Where(kv => kv.Value.IsFinished)
+                .OrderBy(kv => kv.Value.CreatedAt)
+                .Select(kv => kv.Key)
+                .FirstOrDefault();
+            if (staleGid == null)
+            {
+                App.Log($"[ui] 进度小窗已达上限 {MaxLiveProgressWindows}，跳过 gid={gid}");
+                return false;
+            }
+            if (_progressWindows.Remove(staleGid, out var stale))
+            {
+                try { stale.Close(); } catch { }
+                App.Log($"[ui] 回收已结束的进度小窗 gid={staleGid} 以腾出配额");
+            }
+        }
+
+        _recentWindowCreations.Enqueue(now);
+        return true;
     }
 
     /// <summary>把进度小窗放到主显示器屏幕正中央，尺寸固定为紧凑卡片。</summary>
@@ -526,6 +584,12 @@ public partial class MainWindow : Window
             _frostedValueText.Text = $"{(int)Math.Round(v * 100)}%";
     }
 
+    /// <summary>
+    /// 界面定时刷新。数据来源是引擎轮询推送的快照（<see cref="OnEngineEvent"/> 里的 StatsUpdated），
+    /// **不再自己打 RPC**：原先这里每 900ms 要发 4 次 aria2 调用（3 次列表 + 1 次统计），
+    /// 与引擎自身的轮询完全重复，是常驻开销的第二大来源。
+    /// 仅首帧（还没收到过引擎事件）才兜底拉一次。
+    /// </summary>
     private async Task RefreshAsync()
     {
         if (App.Host?.Engine == null || !App.Host.Engine.IsRunning)
@@ -533,26 +597,33 @@ public partial class MainWindow : Window
             ConnStatusText.Text = "引擎未运行";
             return;
         }
-        try
-        {
-            var tasks = await App.Host.Engine.GetAllTasksAsync();
-            var stat = await App.Host.Engine.GetGlobalStatAsync();
 
-            DispatcherQueue.TryEnqueue(() =>
-            {
-                GlobalSpeedText.Text = $"{TaskItemViewModel.FormatSpeed(stat.DownloadSpeed)}/s";
-                ActiveCountText.Text = $"活动 {stat.NumActive} · 等待 {stat.NumWaiting}";
-                ConnStatusText.Text = "引擎运行中";
-                MergeTasks(tasks);
-                // 兜底：定时刷新时重刷可见容器的选中视觉，覆盖虚拟化回收再实例化
-                ApplySelectionVisuals(TaskList);
-                ApplySelectionVisuals(BtList);
-            });
-        }
-        catch (Exception ex)
+        var tasks = _snapshot;
+        var stat = _stats;
+        if (tasks == null || stat == null)
         {
-            DispatcherQueue.TryEnqueue(() => ConnStatusText.Text = $"引擎异常: {ex.Message}");
+            try
+            {
+                tasks = await App.Host.Engine.GetAllTasksAsync();
+                stat = await App.Host.Engine.GetGlobalStatAsync();
+            }
+            catch (Exception ex)
+            {
+                DispatcherQueue.TryEnqueue(() => ConnStatusText.Text = $"引擎异常: {ex.Message}");
+                return;
+            }
         }
+
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            GlobalSpeedText.Text = $"{TaskItemViewModel.FormatSpeed(stat.DownloadSpeed)}/s";
+            ActiveCountText.Text = $"活动 {stat.NumActive} · 等待 {stat.NumWaiting}";
+            ConnStatusText.Text = "引擎运行中";
+            MergeTasks(tasks);
+            // 兜底：定时刷新时重刷可见容器的选中视觉，覆盖虚拟化回收再实例化
+            ApplySelectionVisuals(TaskList);
+            ApplySelectionVisuals(BtList);
+        });
     }
 
     private void MergeTasks(List<DownloadTaskInfo> tasks)

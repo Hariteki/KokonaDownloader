@@ -239,6 +239,8 @@ public static class ThemeService
             try { controller.Dispose(); }
             catch (Exception ex) { App.Log($"释放背景控制器失败: {ex.Message}"); }
         }
+        // 一并退订该窗口上关联到旧控制器/旧配置的事件处理器（否则会一直累积，见 WindowEffects.BackdropWiring）
+        WindowEffects.DetachBackdropWiring(window);
         window.SystemBackdrop = null;
     }
 

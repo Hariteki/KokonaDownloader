@@ -243,17 +243,23 @@ function clearLegacyForwarded() {
  */
 async function handleDownloadCreated(item) {
   const key = KokonaLogic.urlKey(item.url);
-  // 同步占位去重：会话恢复可能并发触发同一链接的多个下载项
+  const s = await loadSettings();
+  const fwBase = await getFirewallBase();
+
+  // 先判定"该不该接管"，再决定要不要动这个下载项。
+  // 顺序很重要：历史上的占位去重写在最前面，命中占位就直接 cancel+erase，
+  // 完全不看 autoCapture/历史回放判定 —— 结果是"关掉自动接管"或"会话恢复回放"时，
+  // 同链接的下载项会被静默取消并抹掉记录（既没转发给客户端，也没留给浏览器）。
+  if (!KokonaLogic.shouldCapture(item, s, fwBase)) return;
+
+  // 同一链接正在转发中（并发重复项）：这里才拦掉，且已确认它本该被接管
   if (forwardingNow.has(key)) {
     await cancelAndErase(item.id);
     return;
   }
+  // has 与 add 之间没有 await：Service Worker 单线程，不会插入其它回调
   forwardingNow.add(key);
   try {
-    const s = await loadSettings();
-    const fwBase = await getFirewallBase();
-    if (!KokonaLogic.shouldCapture(item, s, fwBase)) return;
-
     const payload = KokonaLogic.buildDownloadPayload(item, s);
     try {
       // 新建或客户端已有任务（duplicate）都算接收成功：拦截浏览器下载，交给客户端管理

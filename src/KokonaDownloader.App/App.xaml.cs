@@ -28,14 +28,30 @@ public partial class App : Application
         };
     }
 
+    /// <summary>日志大小上限：超过即轮转为 app.log.1（只保留一份历史，防止无限增长）。</summary>
+    private const long MaxLogBytes = 5 * 1024 * 1024;
+
     public static void Log(string msg)
     {
         try
         {
+            // aria2 的 stdout 里大量是空白/纯空格行（控制台读数残影）：丢弃。
+            // 实测这类行占历史 app.log 的 96%，保留它们只会让文件以 ~8 MB/天 无限膨胀。
+            if (string.IsNullOrWhiteSpace(msg)) return;
             var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {msg}{Environment.NewLine}";
+            RotateLogIfNeeded();
             File.AppendAllText(AppPaths.LogFile, line);
         }
         catch { }
+    }
+
+    /// <summary>超过上限时把 app.log 轮转为 app.log.1（覆盖上一份），保证日志有界。</summary>
+    private static void RotateLogIfNeeded()
+    {
+        var path = AppPaths.LogFile;
+        var info = new FileInfo(path);
+        if (!info.Exists || info.Length < MaxLogBytes) return;
+        File.Move(path, path + ".1", overwrite: true);
     }
 
     private static SplashWindow? _splash;

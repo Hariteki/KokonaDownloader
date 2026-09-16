@@ -20,6 +20,13 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!-- 限制并行度：每个集成测试类都会拉起真实 aria2c + 回环下载，
+       8 个类并行时互相争抢 CPU/端口，曾导致时间敏感断言（BT 位图、续传）偶发失败。
+       2 路并行在速度与稳定性之间取平衡，详见 测试报告-全量测试补充与性能审查.md §5.3 -->
+  <ItemGroup>
+    <None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\KokonaDownloader.Core\KokonaDownloader.Core.csproj" />
   </ItemGroup>

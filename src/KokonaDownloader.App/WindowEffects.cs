@@ -247,6 +247,36 @@ public static class WindowEffects
         catch (Exception ex) { App.Log($"应用半透明 Acrylic 失败: {ex.Message}"); return null; }
     }
 
+    /// <summary>窗口当前的后台背景接线：控制器、配置与该窗口上的三个事件处理器。
+    /// 保存处理器引用是必需的——重新应用主题/切换透明度模式时会再次进入
+    /// <see cref="ConfigureForWindow"/>，不退订旧处理器就会**每次 Apply 都往同一个窗口上再挂 3 个**
+    /// （长会话 + 频繁切换主题/拖动磨砂滑块时无限累积，并让已释放的控制器无法被回收）。</summary>
+    private sealed class BackdropWiring
+    {
+        public required SystemBackdropConfiguration Config { get; init; }
+        public required ISystemBackdropControllerWithTargets Controller { get; init; }
+        public Windows.Foundation.TypedEventHandler<FrameworkElement, object>? ThemeChanged { get; init; }
+        public Windows.Foundation.TypedEventHandler<object, WindowActivatedEventArgs>? Activated { get; init; }
+        public Windows.Foundation.TypedEventHandler<object, WindowEventArgs>? Closed { get; init; }
+    }
+
+    private static readonly Dictionary<Window, BackdropWiring> BackdropWirings = new();
+
+    /// <summary>退订该窗口上一次的背景接线（幂等）。释放控制器时也应调用。</summary>
+    public static void DetachBackdropWiring(Window window)
+    {
+        if (!BackdropWirings.TryGetValue(window, out var wiring)) return;
+        BackdropWirings.Remove(window);
+        try
+        {
+            if (wiring.ThemeChanged != null && window.Content is FrameworkElement root)
+                root.ActualThemeChanged -= wiring.ThemeChanged;
+        }
+        catch { }
+        try { if (wiring.Activated != null) window.Activated -= wiring.Activated; } catch { }
+        try { if (wiring.Closed != null) window.Closed -= wiring.Closed; } catch { }
+    }
+
     private static void ConfigureForWindow(
         ISystemBackdropControllerWithTargets controller,
         Window window,
@@ -260,18 +290,39 @@ public static class WindowEffects
         if (kind.HasValue && controller is MicaController mica)
             mica.Kind = kind.Value;
 
+        // 先退订上一次的接线，再挂新的（见 BackdropWiring 注释）
+        DetachBackdropWiring(window);
+
         // 主题跟随内容
+        Windows.Foundation.TypedEventHandler<FrameworkElement, object>? themeChanged = null;
         if (window.Content is FrameworkElement root)
         {
             config.Theme = ToBackdropTheme(root.ActualTheme);
-            root.ActualThemeChanged += (_, _) =>
-                config.Theme = ToBackdropTheme(root.ActualTheme);
+            themeChanged = (_, _) => config.Theme = ToBackdropTheme(root.ActualTheme);
+            root.ActualThemeChanged += themeChanged;
         }
 
         // 窗口激活/失活状态
         config.IsInputActive = true;
-        window.Activated += (_, e) => config.IsInputActive = e.WindowActivationState != WindowActivationState.Deactivated;
-        window.Closed += (_, _) => controller.Dispose();
+        var activated = new Windows.Foundation.TypedEventHandler<object, WindowActivatedEventArgs>(
+            (_, e) => config.IsInputActive = e.WindowActivationState != WindowActivationState.Deactivated);
+        window.Activated += activated;
+
+        var closed = new Windows.Foundation.TypedEventHandler<object, WindowEventArgs>((_, _) =>
+        {
+            DetachBackdropWiring(window);
+            controller.Dispose();
+        });
+        window.Closed += closed;
+
+        BackdropWirings[window] = new BackdropWiring
+        {
+            Config = config,
+            Controller = controller,
+            ThemeChanged = themeChanged,
+            Activated = activated,
+            Closed = closed
+        };
     }
 
     private static SystemBackdropTheme ToBackdropTheme(ElementTheme theme) => theme switch

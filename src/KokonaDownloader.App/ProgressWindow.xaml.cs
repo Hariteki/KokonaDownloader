@@ -12,9 +12,16 @@ namespace KokonaDownloader.App;
 public partial class ProgressWindow : Window
 {
     private readonly string _gid;
-    private readonly DispatcherTimer _timer = new();
+    private bool _closed;
+    private bool _engineSubscribed;
     /// <summary>BT 任务小窗：以方块矩阵替代进度条，窗口更高。</summary>
     public bool IsBt { get; }
+
+    /// <summary>任务是否已结束（结束的小窗可被主界面回收，用于限制同时存在的窗口数）。</summary>
+    public bool IsFinished { get; private set; }
+
+    /// <summary>创建时刻：回收时按"最旧的已结束窗口"优先。</summary>
+    public DateTime CreatedAt { get; } = DateTime.UtcNow;
 
     public ProgressWindow(string gid, string taskName, bool isBt = false)
     {
@@ -47,24 +54,56 @@ public partial class ProgressWindow : Window
         PieceGrid.SizeChanged += (_, _) => TryAutoFitHeight();
         RootGrid.SizeChanged += (_, _) => TryAutoFitHeight();
 
-        _timer.Interval = TimeSpan.FromMilliseconds(500);
-        _timer.Tick += async (_, _) => await RefreshAsync();
-        _timer.Start();
+        // 不再自己每 500ms 轮询：引擎本来就在轮询（StatsUpdated 带全量快照），订阅即可。
+        // 原先每个小窗 2 次/秒 RPC，批量任务（上百个体检窗）时是最大的一笔常驻开销。
+        if (App.Host?.Engine != null)
+        {
+            App.Host.Engine.EngineEvent += OnEngineEvent;
+            _engineSubscribed = true;
+        }
 
         Closed += (_, _) =>
         {
-            _timer.Stop();
+            _closed = true;
+            // 必须退订：引擎生命周期长于窗口，不退订会让已关闭窗口继续被回调（泄漏 + 无效工作）
+            if (_engineSubscribed && App.Host?.Engine != null)
+                App.Host.Engine.EngineEvent -= OnEngineEvent;
             ThemeService.Unregister(this);
         };
-        _ = RefreshAsync();
+        _ = RefreshOnceAsync();
     }
 
-    private async Task RefreshAsync()
+    /// <summary>引擎轮询线程回调：只关心本窗口对应的任务（快照里没有 = 任务已被移除）。</summary>
+    private void OnEngineEvent(object? sender, EngineEventArgs e)
     {
-        if (App.Host?.Engine == null || !App.Host.Engine.IsRunning) return;
+        if (_closed) return;
+        switch (e.Type)
+        {
+            case "StatsUpdated" when e.Tasks != null:
+                var t = e.Tasks.FirstOrDefault(x => x.Gid == _gid);
+                if (t == null)
+                {
+                    DispatcherQueue.TryEnqueue(Close);
+                    return;
+                }
+                DispatcherQueue.TryEnqueue(() => UpdateUi(t));
+                break;
+            case "TaskRemoved" when e.Task?.Gid == _gid:
+                DispatcherQueue.TryEnqueue(Close);
+                break;
+        }
+    }
+
+    /// <summary>一次性取当前状态（开窗首帧、点击暂停/继续后立即反馈用）。</summary>
+    private async Task RefreshOnceAsync()
+    {
+        var engine = App.Host?.Engine;
+        if (engine == null || !engine.IsRunning) return;
         try
         {
-            var t = await App.Host.Engine.GetTaskAsync(_gid);
+            // 优先复用引擎快照，取不到再单查一次
+            var t = engine.TryGetRecentSnapshot(5000)?.FirstOrDefault(x => x.Gid == _gid)
+                    ?? await engine.GetTaskAsync(_gid);
             if (t == null)
             {
                 // 任务已被删除：关闭窗口
@@ -73,11 +112,13 @@ public partial class ProgressWindow : Window
             }
             DispatcherQueue.TryEnqueue(() => UpdateUi(t));
         }
-        catch { /* 引擎异常忽略，下次轮询再试 */ }
+        catch { /* 引擎异常忽略，后续由引擎事件驱动刷新 */ }
     }
 
     private void UpdateUi(DownloadTaskInfo t)
     {
+        // 终态小窗保留"打开文件夹"，但会被主界面回收（腾出窗口配额），见 MainWindow.ShouldCreateProgressWindow
+        IsFinished = t.State is TaskState.Completed or TaskState.Failed or TaskState.Removed;
         var percent = Math.Round(t.Progress * 100, 1);
         Bar.Value = percent;
         PercentText.Text = $"{percent:0.#}%";
@@ -127,12 +168,10 @@ public partial class ProgressWindow : Window
                 StatusText.Text = "已完成";
                 BtnPause.Visibility = Visibility.Collapsed;
                 BtnOpenFolder.Visibility = Visibility.Visible;
-                _timer.Stop();
                 break;
             case TaskState.Failed:
                 StatusText.Text = string.IsNullOrEmpty(t.ErrorMessage) ? "下载失败" : $"失败: {t.ErrorMessage}";
                 BtnPause.Visibility = Visibility.Collapsed;
-                _timer.Stop();
                 break;
         }
 
@@ -189,7 +228,7 @@ public partial class ProgressWindow : Window
                 await App.Host.Engine.PauseAsync(_gid);
             else if (t.State == TaskState.Paused)
                 await App.Host.Engine.ResumeAsync(_gid);
-            await RefreshAsync();
+            await RefreshOnceAsync();
         }
         catch { }
     }

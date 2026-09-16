@@ -32,13 +32,15 @@ internal static class StandaloneBootstrap
     internal static void EnsureRuntimeFiles()
     {
         // 单文件 exe 的 AppContext.BaseDirectory 指向临时解压目录，不是 exe 所在目录。
-        // XAML 运行时从 exe 所在目录加载 XBF/PRI，所以必须用 exe 目录。
+        // XAML 运行时从 exe 所在目录加载 XBF/PRI，所以必须把运行时文件放到 exe 所在目录。
+        // 用户要求：exe 目录必须保持干净（只有 exe 本身），所以运行时文件统一解压到
+        // %LOCALAPPDATA%\KokonaDownloader\Standalone，并把 exe 复制过去、从那里重新拉起。
         var exePath = Environment.ProcessPath;
         if (string.IsNullOrEmpty(exePath))
             return;
         var baseDir = Path.GetDirectoryName(exePath) + Path.DirectorySeparatorChar;
 
-        // 完整目录布局：resources.pri 已在 exe 旁，无需处理
+        // 完整目录布局：resources.pri 已在 exe 旁（如 dist 目录 / 桌面文件夹），无需处理
         if (File.Exists(Path.Combine(baseDir, "resources.pri")))
             return;
 
@@ -49,25 +51,15 @@ internal static class StandaloneBootstrap
         if (names.Count == 0)
             return; // 未嵌入载荷的开发构建（如 IDE 直接运行），无需处理
 
-        // 1) 首选：解压到 exe 旁
-        try
-        {
-            ExtractAll(asm, names, baseDir);
-            return;
-        }
-        catch
-        {
-            // 目录只读 → 走回退路径
-        }
-
-        // 2) 回退：解压到 %LOCALAPPDATA%\KokonaDownloader\Standalone，从那里重新拉起
-        var fallback = Path.Combine(
+        // 解压到 %LOCALAPPDATA%\KokonaDownloader\Standalone，从那里重新拉起
+        // 这样 exe 所在目录保持干净（只有 exe 本身），运行时文件在 %LOCALAPPDATA%
+        var runtimeDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "KokonaDownloader", "Standalone");
-        Directory.CreateDirectory(fallback);
-        ExtractAll(asm, names, fallback);
+        Directory.CreateDirectory(runtimeDir);
+        ExtractAll(asm, names, runtimeDir);
 
-        var targetExe = Path.Combine(fallback, Path.GetFileName(exePath));
+        var targetExe = Path.Combine(runtimeDir, Path.GetFileName(exePath));
         try
         {
             File.Copy(exePath, targetExe, overwrite: true);

@@ -88,6 +88,82 @@ var p4 = KokonaLogic.buildDownloadPayload(
     mkItem({ url: "magnet:?xt=urn:btih:abc123", filename: "" }), S);
 ok(!("filename" in p4), "magnet payload carries no filename");
 
+// ===== normalizeSettings =====
+// Settings can be typed/pasted by the user, so the normalizer must be forgiving.
+var n1 = KokonaLogic.normalizeSettings({ host: "http://192.168.1.5/", port: "17000", secret: "k" });
+ok(n1.host === "192.168.1.5", "normalizeSettings strips protocol prefix and trailing slash");
+ok(n1.port === 17000, "normalizeSettings accepts port given as a string");
+
+var n2 = KokonaLogic.normalizeSettings({ host: "127.0.0.1:17000", port: "" });
+ok(n2.host === "127.0.0.1", "normalizeSettings strips :port suffix from the host field");
+// Recorded current behaviour: the port embedded in the host string is dropped, not adopted.
+// A user pasting "host:port" into the host box therefore keeps the default port.
+ok(n2.port === 16800, "normalizeSettings: port embedded in host string is NOT adopted (falls back to default)");
+
+var n3 = KokonaLogic.normalizeSettings({});
+ok(n3.host === "127.0.0.1" && n3.port === 16800 && n3.secret === "" && n3.autoCapture === true,
+    "normalizeSettings defaults match client defaults (16800)");
+
+ok(KokonaLogic.normalizeSettings({ port: 99999 }).port === 16800,
+    "normalizeSettings rejects out-of-range port");
+ok(KokonaLogic.normalizeSettings({ port: 0 }).port === 16800,
+    "normalizeSettings rejects zero port");
+ok(KokonaLogic.normalizeSettings({ host: "   ", port: "" }).host === "127.0.0.1",
+    "normalizeSettings blank host falls back to loopback");
+ok(KokonaLogic.normalizeSettings({ autoCapture: false }).autoCapture === false,
+    "normalizeSettings preserves autoCapture=false");
+ok(KokonaLogic.normalizeSettings({ secret: null }).secret === "",
+    "normalizeSettings null secret becomes empty string");
+ok(KokonaLogic.normalizeSettings({ host: "localhost:16800/api" }).host === "localhost",
+    "normalizeSettings strips both :port and path from host");
+
+// ===== baseUrl =====
+ok(KokonaLogic.baseUrl({ host: "127.0.0.1", port: 16800 }) === "http://127.0.0.1:16800",
+    "baseUrl builds http://host:port");
+
+// ===== isSupportedUrl =====
+ok(KokonaLogic.isSupportedUrl("ftp://example.com/f.zip") === true, "ftp url supported");
+ok(KokonaLogic.isSupportedUrl("magnet:?xt=urn:btih:abc") === true, "magnet url supported");
+ok(KokonaLogic.isSupportedUrl("HTTPS://example.com/f.zip") === true, "scheme match is case-insensitive");
+ok(KokonaLogic.isSupportedUrl("  https://example.com/f.zip  ") === true, "surrounding whitespace trimmed");
+ok(KokonaLogic.isSupportedUrl("file:///C:/f.zip") === false, "file scheme NOT supported");
+ok(KokonaLogic.isSupportedUrl("data:text/plain,hi") === false, "data scheme NOT supported");
+ok(KokonaLogic.isSupportedUrl("") === false, "empty url NOT supported");
+
+// ===== isOwnApiUrl (self-loop guard) =====
+ok(KokonaLogic.isOwnApiUrl("http://127.0.0.1:16800/api/ping", S) === true,
+    "own API url detected (would cause a self-loop)");
+ok(KokonaLogic.isOwnApiUrl("http://127.0.0.1:16801/api/ping", S) === false,
+    "different port is NOT own API");
+ok(KokonaLogic.isOwnApiUrl("https://example.com/", S) === false,
+    "foreign host is NOT own API");
+
+// ===== baseName =====
+ok(KokonaLogic.baseName("C:\\Users\\me\\Downloads\\a.zip") === "a.zip", "baseName handles windows path");
+ok(KokonaLogic.baseName("/home/me/a.zip") === "a.zip", "baseName handles posix path");
+ok(KokonaLogic.baseName("plain.zip") === "plain.zip", "baseName passes through bare name");
+ok(KokonaLogic.baseName("C:\\dir\\") === "", "baseName of trailing separator is empty");
+ok(KokonaLogic.baseName("") === "", "baseName of empty string is empty");
+
+// ===== urlKey (in-flight duplicate guard) =====
+ok(KokonaLogic.urlKey("https://a/b.zip") === KokonaLogic.urlKey("https://a/b.zip"),
+    "urlKey is deterministic");
+ok(KokonaLogic.urlKey("https://a/b.zip") !== KokonaLogic.urlKey("https://a/c.zip"),
+    "different urls get different keys");
+ok(KokonaLogic.urlKey("https://a/b.zip#frag") === KokonaLogic.urlKey("https://a/b.zip"),
+    "urlKey ignores the fragment");
+ok(KokonaLogic.urlKey("https://a/b.zip?x=1") !== KokonaLogic.urlKey("https://a/b.zip"),
+    "urlKey keeps the query string distinct");
+ok(/^[0-9a-f]+$/.test(KokonaLogic.urlKey("anything")), "urlKey is a lowercase hex string");
+
+// ===== shouldCapture: remaining combinations =====
+ok(KokonaLogic.shouldCapture(mkItem({ url: "ftp://example.com/f.zip" }), S, EXT_START) === true,
+    "shouldCapture: ftp download captured");
+ok(KokonaLogic.shouldCapture(mkItem({ url: "magnet:?xt=urn:btih:abc" }), S, EXT_START) === true,
+    "shouldCapture: magnet link captured");
+ok(KokonaLogic.shouldCapture(null, S, EXT_START) === false, "shouldCapture: null item");
+ok(KokonaLogic.shouldCapture(mkItem({}), null, EXT_START) === false, "shouldCapture: null settings");
+
 WScript.Echo("-----");
 WScript.Echo("passed " + pass + " / " + (pass + fail));
 WScript.Quit(fail === 0 ? 0 : 1);

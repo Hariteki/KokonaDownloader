@@ -38,6 +38,15 @@ public sealed class DownloadEngine : IAsyncDisposable
     private string? _lastPollSig;
     /// <summary>本会话内新建任务的 Gid 标记：轮询首次上报时消费并随事件携带 IsNewTask。</summary>
     private readonly ConcurrentDictionary<string, byte> _newTaskGids = new();
+
+    /// <summary>最近一次轮询得到的任务快照：UI 定时刷新与"下载前重复预检"直接复用它，
+    /// 省掉各自再打一轮 RPC（界面原本每 900ms 自己拉 4 次、每次下载前又拉 3 次）。</summary>
+    private volatile List<DownloadTaskInfo> _latestSnapshot = new();
+    /// <summary>快照发布时间（DateTime.Ticks，0 = 立即失效）。用 long + Volatile 保证跨线程读写原子。</summary>
+    private long _latestSnapshotTicks;
+
+    /// <summary>空闲（没有下载中/排队任务）时的轮询间隔：退避以降低常驻开销。</summary>
+    private const int IdlePollIntervalMs = 2500;
     /// <summary>infohash → (Gid, 任务名) 索引：每轮询重建，添加任务前做重复预检。</summary>
     private volatile ConcurrentDictionary<string, (string Gid, string Name)> _btHashIndex = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _startLock = new();
@@ -188,6 +197,7 @@ public sealed class DownloadEngine : IAsyncDisposable
     {
         while (!ct.IsCancellationRequested)
         {
+            var idle = false;
             try
             {
                 var results = await _client.MultiCallAsync(new[]
@@ -333,7 +343,22 @@ public sealed class DownloadEngine : IAsyncDisposable
                     EngineEvent?.Invoke(this, new EngineEventArgs { Type = "TaskRemoved", Task = new DownloadTaskInfo { Gid = gid, State = TaskState.Removed } });
                 }
 
+                // 发布快照：UI 与重复预检后续都从这里取，不再各自 RPC
+                _latestSnapshot = tasks;
+                Volatile.Write(ref _latestSnapshotTicks, DateTime.Now.Ticks);
+
+                // 状态字典清理：消失的任务（被删除/被清理）不该一直留在内存里
+                if (_lastStates.Count > tasks.Count)
+                {
+                    var alive = new HashSet<string>(tasks.Select(t => t.Gid));
+                    foreach (var gid in _lastStates.Keys)
+                        if (!alive.Contains(gid)) _lastStates.TryRemove(gid, out _);
+                }
+
                 EngineEvent?.Invoke(this, new EngineEventArgs { Type = "StatsUpdated", Stats = stats, Tasks = tasks });
+
+                // 空转退避：没有任何进行中/排队任务时拉长轮询间隔（仍能及时看到新任务：新任务由 addUri 后立即置位）
+                idle = stats.NumActive == 0 && stats.NumWaiting == 0;
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
@@ -341,7 +366,8 @@ public sealed class DownloadEngine : IAsyncDisposable
                 _log($"轮询异常: {ex.Message}");
                 EngineEvent?.Invoke(this, new EngineEventArgs { Type = "EngineError", Message = ex.Message });
             }
-            try { await Task.Delay(_config.PollIntervalMs, ct).ConfigureAwait(false); }
+            var delayMs = idle ? Math.Max(_config.PollIntervalMs, IdlePollIntervalMs) : _config.PollIntervalMs;
+            try { await Task.Delay(delayMs, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -447,7 +473,10 @@ public sealed class DownloadEngine : IAsyncDisposable
             .Select(u => u.Trim())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (targets.Count == 0) return new List<DownloadTaskInfo>();
-        var all = await GetAllTasksAsync(ct).ConfigureAwait(false);
+        // 优先复用轮询快照：每次 /api/download 都额外打一轮 RPC 是纯浪费。
+        // 窗口取 1.2s（略大于有任务在跑时的轮询间隔 800ms）：既能在下载中稳定命中缓存，
+        // 又不会拿一份过旧的数据去判重（把"刚刚完成"的任务误判成"仍在下载中"而拒收新任务）。
+        var all = TryGetRecentSnapshot(1200) ?? await GetAllTasksAsync(ct).ConfigureAwait(false);
         return all
             .Where(t => t.State is not (TaskState.Completed or TaskState.Failed or TaskState.Removed))
             .Where(t => t.Urls.Any(u => targets.Contains(u)))
@@ -497,6 +526,7 @@ public sealed class DownloadEngine : IAsyncDisposable
             SourceMagnet = isMagnet ? req.Urls.First(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase)) : null,
             AddedAt = DateTime.Now
         });
+        InvalidateSnapshot(); // 集合已变，判重/列表不应再用旧快照
         var status = await _client.TellStatusAsync(gid, ct).ConfigureAwait(false);
         return status != null
             ? ToTaskInfo(status)
@@ -529,6 +559,7 @@ public sealed class DownloadEngine : IAsyncDisposable
             IsBt = true,
             AddedAt = DateTime.Now
         });
+        InvalidateSnapshot();
         var status = await _client.TellStatusAsync(gid, ct).ConfigureAwait(false);
         return status != null
             ? ToTaskInfo(status)
@@ -589,6 +620,7 @@ public sealed class DownloadEngine : IAsyncDisposable
             });
             results.Add(new DownloadTaskInfo { Gid = gids[i], TaskNumber = numbers[i], Name = list[i].FileName ?? list[i].Urls.First() });
         }
+        InvalidateSnapshot();
         return results;
     }
 
@@ -656,6 +688,7 @@ public sealed class DownloadEngine : IAsyncDisposable
         }
         _store.RemoveMeta(gid);
         _lastStates.TryRemove(gid, out _);
+        InvalidateSnapshot(); // 集合已变：避免"刚删掉又立刻重下"被判成重复任务而拒收
     }
 
     /// <summary>重新下载：用原任务的 URL 与参数新建任务。</summary>
@@ -682,12 +715,10 @@ public sealed class DownloadEngine : IAsyncDisposable
         return status != null ? ToTaskInfo(status) : null;
     }
 
+    /// <summary>取全部任务。用一次 multicall 完成（原先 3 次独立 RPC + 3 次 HTTP 往返）。</summary>
     public async Task<List<DownloadTaskInfo>> GetAllTasksAsync(CancellationToken ct = default)
     {
-        var (active, waiting, stopped) = (
-            await _client.TellActiveAsync(ct).ConfigureAwait(false),
-            await _client.TellWaitingAsync(ct: ct).ConfigureAwait(false),
-            await _client.TellStoppedAsync(ct: ct).ConfigureAwait(false));
+        var (active, waiting, stopped) = await _client.TellAllAsync(ct: ct).ConfigureAwait(false);
         var all = active.Concat(waiting).Concat(stopped).Select(ToTaskInfo).ToList();
         // 已完成/失败优先按完成时间倒序，其余保持
         return all.OrderByDescending(t => t.State is TaskState.Completed or TaskState.Failed ? 1 : 0)
@@ -696,6 +727,25 @@ public sealed class DownloadEngine : IAsyncDisposable
 
     public async Task<GlobalStat> GetGlobalStatAsync(CancellationToken ct = default)
         => await _client.GetGlobalStatAsync(ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// 最近一次轮询快照（不超过 <paramref name="maxAgeMs"/> 毫秒时返回，否则返回 null）。
+    /// 界面刷新与重复预检用它可以把各自的 RPC 降到 0：轮询本身最多 2.5s 一次，
+    /// 对"列表显示"与"重复判断"这类容忍秒级延迟的场景完全够用。
+    /// </summary>
+    public List<DownloadTaskInfo>? TryGetRecentSnapshot(int maxAgeMs)
+    {
+        var published = Volatile.Read(ref _latestSnapshotTicks);
+        if (published == 0) return null;
+        return (DateTime.Now.Ticks - published) <= maxAgeMs * TimeSpan.TicksPerMillisecond ? _latestSnapshot : null;
+    }
+
+    /// <summary>
+    /// 任务集合刚发生变化（本地新增/删除）时让快照立即失效。
+    /// 必须做：否则"刚添加完立刻再发一次同样的链接"这种重复预检会拿着**添加之前**的快照去判重，
+    /// 漏判成"不是重复"从而真的建出第二个任务（新增测试 重复链接返回duplicate并跳过添加 抓到的正是这个）。
+    /// </summary>
+    private void InvalidateSnapshot() => Volatile.Write(ref _latestSnapshotTicks, 0);
 
     public async Task SetGlobalSpeedLimitAsync(long bytesPerSec, CancellationToken ct = default)
         => await _client.SetGlobalSpeedLimitAsync(bytesPerSec, ct).ConfigureAwait(false);
