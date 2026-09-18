@@ -214,9 +214,9 @@ public static class WindowEffects
     }
 
     /// <summary>
-    /// 可定制色调的 Acrylic 磨砂背景：透明度模式切换用。
+    /// 可定制色调的 Acrylic 磨砂背景：主窗口磨砂背景（唯一主题）用。
     /// tintOpacity 越大主题色越浓（背景越不明显），luminosityOpacity 控制明度层。
-    /// 返回实际生效的控制器（供切换模式时释放），失败返回 null。
+    /// 返回实际生效的控制器（供重应用时释放），失败返回 null。
     /// </summary>
     public static ISystemBackdropControllerWithTargets? TryApplyAcrylicTinted(
         Window window,
@@ -247,10 +247,37 @@ public static class WindowEffects
         catch (Exception ex) { App.Log($"应用半透明 Acrylic 失败: {ex.Message}"); return null; }
     }
 
+    /// <summary>
+    /// 复用窗口上已挂载的染色 Acrylic 控制器，直接更新染色参数（主题色切换时用）。
+    /// 不销毁重建：销毁后到新控制器上屏前的间隙会露出窗口黑底（XAML 根背景为透明），
+    /// 新控制器上屏时还带淡入动画，两者叠加表现为切换主题色时闪黑一下。
+    /// 返回 false 表示该窗口当前没有可复用的 DesktopAcrylic 接线，
+    /// 调用方应走完整挂载流程（<see cref="TryApplyAcrylicTinted"/>）。
+    /// </summary>
+    public static bool TryUpdateAcrylicTint(
+        Window window,
+        Windows.UI.Color tintColor,
+        double tintOpacity,
+        double luminosityOpacity,
+        bool thin)
+    {
+        try
+        {
+            if (!BackdropWirings.TryGetValue(window, out var wiring)) return false;
+            if (wiring.Controller is not DesktopAcrylicController acrylic) return false;
+            acrylic.Kind = thin ? DesktopAcrylicKind.Thin : DesktopAcrylicKind.Base;
+            acrylic.TintColor = tintColor;
+            acrylic.TintOpacity = (float)Math.Clamp(tintOpacity, 0.0, 1.0);
+            acrylic.LuminosityOpacity = (float)Math.Clamp(luminosityOpacity, 0.0, 1.0);
+            return true;
+        }
+        catch (Exception ex) { App.Log($"更新磨砂染色失败: {ex.Message}"); return false; }
+    }
+
     /// <summary>窗口当前的后台背景接线：控制器、配置与该窗口上的三个事件处理器。
-    /// 保存处理器引用是必需的——重新应用主题/切换透明度模式时会再次进入
+    /// 保存处理器引用是必需的——重新应用主题时会再次进入
     /// <see cref="ConfigureForWindow"/>，不退订旧处理器就会**每次 Apply 都往同一个窗口上再挂 3 个**
-    /// （长会话 + 频繁切换主题/拖动磨砂滑块时无限累积，并让已释放的控制器无法被回收）。</summary>
+    /// （长会话 + 频繁切换主题时无限累积，并让已释放的控制器无法被回收）。</summary>
     private sealed class BackdropWiring
     {
         public required SystemBackdropConfiguration Config { get; init; }

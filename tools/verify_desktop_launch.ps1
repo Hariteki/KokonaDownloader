@@ -1,4 +1,4 @@
-﻿# Test D: launch from the user's actual desktop location (single-file folder) and verify splash + API
+# Test D: launch from the user's actual desktop location (single-file folder) and verify splash + API
 Add-Type @'
 using System;
 using System.Collections.Generic;
@@ -65,7 +65,7 @@ for ($i = 0; $i -lt 60; $i++) {
     Start-Sleep -Milliseconds 500
 }
 Write-Host ("ping: " + $ping)
-if ($null -ne $ping -and $ping -match '"version":"1\.0\.6"') { Write-Host "PASS: desktop launch works, ping 200 v1.0.6" } else { Write-Host "FAIL: desktop launch broken" }
+if ($null -ne $ping -and $ping -match '"version":"1\.0\.8"') { Write-Host "PASS: desktop launch works, ping 200 v1.0.8" } else { Write-Host "FAIL: desktop launch broken" }
 
 Get-Process KokonaDownloader -ErrorAction SilentlyContinue | Stop-Process -Force
 Write-Host "app stopped; test D done"

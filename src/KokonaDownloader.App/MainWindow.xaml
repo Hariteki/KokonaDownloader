@@ -13,25 +13,6 @@
     <Grid x:Name="RootGrid" Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
         <Grid.Resources>
             <converters:BoolToVisibilityConverter x:Key="BoolToVis"/>
-            <!-- 透明度菜单行：WinUI3 的 MenuFlyoutItem 无 Content 属性、MenuFlyout.Items 只收
-                 MenuFlyoutItemBase，无法塞自定义控件（磨砂浓度滑块）。改用普通 Flyout + 仿菜单项按钮。
-                 注意：WinUI3 XAML 不支持 ControlTemplate.Triggers（WMC0011），悬停高亮在代码里处理。 -->
-            <Style x:Key="TransparencyMenuItemStyle" TargetType="Button">
-                <Setter Property="Background" Value="Transparent"/>
-                <Setter Property="BorderThickness" Value="0"/>
-                <Setter Property="Padding" Value="14,8"/>
-                <Setter Property="HorizontalContentAlignment" Value="Left"/>
-                <Setter Property="Template">
-                    <Setter.Value>
-                        <ControlTemplate TargetType="Button">
-                            <Border Background="{TemplateBinding Background}" CornerRadius="4"
-                                    Margin="4,1" Padding="{TemplateBinding Padding}">
-                                <ContentPresenter Content="{TemplateBinding Content}" VerticalAlignment="Center"/>
-                            </Border>
-                        </ControlTemplate>
-                    </Setter.Value>
-                </Setter>
-            </Style>
             <!-- Metro 风格 Tab：纯文字大标题，无圆点无下划线，选中时主题色+加粗。
                  选中/未选中各一层文字，前景直接引用 ThemeResource 实时颜色，切换只动画透明度（交叉淡入淡出）；
                  不用 ColorAnimation 动画主题色，避免它锁存旧主题颜色快照、切换主题后不立即刷新。
@@ -617,13 +598,6 @@
                     <FontIcon Glyph="&#xE790;" FontSize="16"/>
                     <Button.Flyout>
                         <MenuFlyout x:Name="ThemeMenu" Placement="Bottom"/>
-                    </Button.Flyout>
-                </Button>
-                <Button x:Name="BtnTransparency" ToolTipService.ToolTip="窗口透明度" AutomationProperties.Name="窗口透明度">
-                    <FontIcon Glyph="&#xE7B3;" FontSize="16"/>
-                    <!-- 普通 Flyout（非 MenuFlyout）：内容在代码里构建，含磨砂浓度滑块 -->
-                    <Button.Flyout>
-                        <Flyout x:Name="TransparencyFlyout" Placement="Bottom"/>
                     </Button.Flyout>
                 </Button>
                 <Button x:Name="BtnSettings" Click="OnSettingsClick" ToolTipService.ToolTip="设置" AutomationProperties.Name="设置">

@@ -82,52 +82,6 @@ public static class ThemeService
             return true;
         });
 
-    /// <summary>切换窗口透明度模式（写设置 → 持久化 → Changed → 全窗口刷新）。</summary>
-    public static void SetTransparencyMode(TransparencyMode mode) =>
-        App.Host?.Settings.Update(s =>
-        {
-            if (s.Transparency == mode) return false;
-            s.Transparency = mode;
-            return true;
-        });
-
-    /// <summary>当前透明度模式。</summary>
-    public static TransparencyMode CurrentTransparency =>
-        App.Host?.Settings.Current.Transparency ?? TransparencyMode.Opaque;
-
-    /// <summary>当前磨砂浓度（0=更透明 … 1=更不透明，仅 Frosted 模式生效）。</summary>
-    public static double CurrentFrostedStrength =>
-        Math.Clamp(App.Host?.Settings.Current.FrostedStrength ?? 0.5, 0.0, 1.0);
-
-    /// <summary>调整磨砂浓度（写设置 → 持久化 → Changed → 全窗口刷新）。</summary>
-    public static void SetFrostedStrength(double strength)
-    {
-        var v = Math.Clamp(strength, 0.0, 1.0);
-        App.Host?.Settings.Update(s =>
-        {
-            if (Math.Abs(s.FrostedStrength - v) < 0.005) return false;
-            s.FrostedStrength = v;
-            return true;
-        });
-    }
-
-    /// <summary>
-    /// 磨砂浓度 → Acrylic 参数（分段线性，0.5 锚定原始观感）：
-    ///   0.0（更透明）  → tint 0.12 / luminosity 0.06
-    ///   0.5（原始观感）→ tint 0.70 / luminosity 0.55
-    ///   1.0（更不透明）→ tint 0.98 / luminosity 0.90
-    /// </summary>
-    public static (double Tint, double Luminosity) FrostedParams(double strength)
-    {
-        var v = Math.Clamp(strength, 0.0, 1.0);
-        if (v <= 0.5)
-            return Lerp((0.12, 0.06), (0.70, 0.55), v / 0.5);
-        return Lerp((0.70, 0.55), (0.98, 0.90), (v - 0.5) / 0.5);
-    }
-
-    private static (double, double) Lerp((double A, double B) from, (double A, double B) to, double t) =>
-        (from.A + (to.A - from.A) * t, from.B + (to.B - from.B) * t);
-
     public static void Register(Window window)
     {
         PruneWindows();
@@ -171,63 +125,53 @@ public static class ThemeService
     }
 
     /// <summary>
-    /// 按当前透明度模式设置窗口背景与原生 Acrylic 背景：
-    ///  Opaque           → 无背景层 + 实心主题背景（完全不透明）
-    ///  Frosted          → 半透明主题色 + Acrylic 磨砂（能透出后面的桌面/窗口，带模糊），
-    ///                     染色浓度由"磨砂浓度"滑块控制（FrostedStrength：更透明 ↔ 更不透明）
-    ///  BlackTransparent → 黑色薄磨砂（最低不透明度，几乎全透明）
+    /// 设置窗口背景与原生 Acrylic 磨砂背景（磨砂透明是唯一主题，无其他可选模式）：
+    /// 半透明主题色 + Acrylic 磨砂（固定最不透明 100% 档，能透出后面的桌面/窗口，带模糊）。
+    /// 重复应用（切换主题色/深浅色）时优先复用已挂载控制器仅更新染色，避免销毁重建产生黑闪。
     ///
     /// 实现说明：XAML 的 MicaBackdrop/DesktopAcrylicBackdrop 在本机实测"设了但不透桌面"
     /// （采样点亮度恒为常数、与窗口后面的内容无关），因此改用本项目进度窗已验证生效的
-    /// 原生 DesktopAcrylicController，并在切换模式时释放上一个控制器。
+    /// 原生 DesktopAcrylicController，并在重应用时释放上一个控制器。
     /// </summary>
     public static void ApplyTransparency(Window window)
     {
         try
         {
-            var mode = CurrentTransparency;
             var t = Current;
-
-            // 先释放上一个原生背景，避免多个控制器叠加
-            ReleaseBackdrop(window);
-
             var root = window.Content as Grid;
+            var tint = ToColor(t.WindowFill);
 
-            switch (mode)
+            // 已有染色 Acrylic 接线时复用控制器、仅更新染色参数：销毁重建会在
+            // "旧控制器已释放、新控制器未上屏"的间隙里（根背景透明）露出窗口黑底，
+            // 新控制器上屏还带淡入动画，表现为切换主题色时闪黑一下（实测约 3-4 帧）。
+            // 复用则只改属性、无间隙，过渡平滑。
+            var reused = WindowEffects.TryUpdateAcrylicTint(
+                window, tint, tintOpacity: 0.98, luminosityOpacity: 0.90, thin: false);
+
+            if (!reused)
             {
-                case TransparencyMode.Opaque:
-                    window.SystemBackdrop = null;
-                    // 强制 A=0xFF：主题 WindowFill 默认 alpha 0xF2（95%），"不透明"必须绝对实心
-                    if (root != null) root.Background = Solid(Opaque(t.WindowFill));
-                    break;
+                // 首次挂载：先释放上一个原生背景，避免多个控制器叠加
+                ReleaseBackdrop(window);
 
-                case TransparencyMode.Frosted:
-                    // 主题色作为染色层，磨砂明显：既保留主题色又透出背景（实测随背景亮度变化）。
-                    // 染色/明度浓度由用户"磨砂浓度"滑块控制（更透明 ↔ 更不透明）
-                    var (tint, lum) = FrostedParams(CurrentFrostedStrength);
-                    var controller = WindowEffects.TryApplyAcrylicTinted(
-                        window, ToColor(t.WindowFill), tintOpacity: tint, luminosityOpacity: lum, thin: false);
-                    if (controller != null) _backdrops[window] = controller;
-                    // 根元素透明：染色交给 Acrylic 控制器，避免二次叠加变实
-                    if (root != null) root.Background = new SolidColorBrush(Colors.Transparent);
-                    break;
-
-                case TransparencyMode.BlackTransparent:
-                    // 黑色薄磨砂 + 极低染色：接近"纯透明"的黑色，桌面几乎原样透出
-                    var blackController = WindowEffects.TryApplyAcrylicTinted(
-                        window, Colors.Black, tintOpacity: 0.18, luminosityOpacity: 0.05, thin: true);
-                    if (blackController != null) _backdrops[window] = blackController;
-                    if (root != null) root.Background = new SolidColorBrush(Colors.Transparent);
-                    break;
+                // 主题色作为染色层，磨砂固定最不透明 100% 档（tint 0.98 / luminosity 0.90）：
+                // 既保留主题色又透出背景（实测随背景亮度变化）。
+                var controller = WindowEffects.TryApplyAcrylicTinted(
+                    window, tint, tintOpacity: 0.98, luminosityOpacity: 0.90, thin: false);
+                if (controller != null) _backdrops[window] = controller;
             }
 
-            // 诊断：确认实际生效的 backdrop 类型与平台支持情况（排查透明不生效时看这里）
+            // 根元素透明：染色交给 Acrylic 控制器，避免二次叠加变实
+            if (root != null && (root.Background as SolidColorBrush)?.Color != Colors.Transparent)
+                root.Background = new SolidColorBrush(Colors.Transparent);
+
+            // 诊断：确认实际生效的 backdrop 类型与平台支持情况（排查磨砂不生效时看这里）
             var rootBg = (root?.Background as SolidColorBrush)?.Color;
-            App.Log($"透明度模式={mode} 原生控制器={(window.SystemBackdrop == null && _backdrops.ContainsKey(window) ? "已挂载" : "无")} " +
+            var state = reused ? "复用" : (window.SystemBackdrop == null && _backdrops.ContainsKey(window) ? "新挂载" : "无");
+            App.Log($"透明度=磨砂 原生控制器={state} 染色={tint} " +
                     $"mica支持={MicaController.IsSupported()} acrylic支持={DesktopAcrylicController.IsSupported()} " +
                     $"根背景={rootBg?.ToString() ?? "n/a"}");
         }
-        catch (Exception ex) { App.Log($"应用透明度模式失败: {ex.Message}"); }
+        catch (Exception ex) { App.Log($"应用磨砂背景失败: {ex.Message}"); }
     }
 
     /// <summary>释放窗口上已挂载的原生背景控制器（切模式 / 关窗时调用）。</summary>

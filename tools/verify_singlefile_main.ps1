@@ -1,4 +1,4 @@
-﻿# 单文件 exe 验证（构建嵌入检查 + A 干净目录 + B dist 目录）
+# 单文件 exe 验证（构建嵌入检查 + A 干净目录 + B dist 目录）
 Add-Type @'
 using System;
 using System.Collections.Generic;
@@ -73,7 +73,7 @@ function Probe-Launch {
     return @{ Process = $p; SplashSeen = $splashSeen }
 }
 
-# ════ 构建验证：exe 内嵌 13 个 standalone/ 资源（含 v1.0.6 新增的 SplashWindow.xbf）════
+# ════ 构建验证：exe 内嵌 standalone/ 资源 ════
 Write-Host "=== build embed check ==="
 $bytes = [System.IO.File]::ReadAllBytes("$dist\$exeName")
 $text = [System.Text.Encoding]::ASCII.GetString($bytes)
@@ -101,7 +101,7 @@ if ($resA.SplashSeen) { Write-Host "PASS: splash visible on single-file exe (B.1
 
 $ping = Test-Ping
 Write-Host ("ping: " + $ping)
-if ($null -ne $ping -and $ping -match '"version":"1\.0\.6"') { Write-Host "PASS: ping 200 version 1.0.6" } else { Write-Host "FAIL: ping missing or wrong version" }
+if ($null -ne $ping -and $ping -match '"version":"1\.0\.8"') { Write-Host "PASS: ping 200 version 1.0.8" } else { Write-Host "FAIL: ping missing or wrong version" }
 
 # 载荷含子目录（icons\、Themes\），必须递归统计；排除 exe 自身 → 期望 13 个载荷文件
 $payload = @(Get-ChildItem $dirA -Recurse -File | Where-Object { $_.Name -ne $exeName })
@@ -118,7 +118,7 @@ Write-Host "=== test B: dist dir (loose files present) ==="
 $resB = Probe-Launch -Path "$dist\$exeName" -Workdir $dist
 $pingB = Test-Ping
 Write-Host ("ping: " + $pingB)
-if ($null -ne $pingB -and $pingB -match '"version":"1\.0\.6"') { Write-Host "PASS: dist dir launch works, ping 200 v1.0.6" } else { Write-Host "FAIL: dist dir launch broken" }
+if ($null -ne $pingB -and $pingB -match '"version":"1\.0\.8"') { Write-Host "PASS: dist dir launch works, ping 200 v1.0.8" } else { Write-Host "FAIL: dist dir launch broken" }
 Stop-App
 
 Write-Host ""

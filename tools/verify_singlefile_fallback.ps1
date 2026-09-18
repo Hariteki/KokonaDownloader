@@ -1,4 +1,4 @@
-﻿# 单文件 exe 只读目录回退验证（测试 C）：icacls 拒绝写 → 应回退 %LOCALAPPDATA%\KokonaDownloader\Standalone 并重新拉起
+# 单文件 exe 只读目录回退验证（测试 C）：icacls 拒绝写 → 应回退 %LOCALAPPDATA%\KokonaDownloader\Standalone 并重新拉起
 $dist = "D:\Project\kokonaDown\dist\KokonaSingleFile"
 $exeName = "KokonaDownloader.exe"
 # /api/ping 免鉴权，无需密钥；需要鉴权的探测请从 settings.json 读 apiSecret（不要写死在脚本里）
@@ -48,7 +48,7 @@ foreach ($proc in $procs) {
 
 $ping = Test-Ping
 Write-Host ("ping: " + $ping)
-if ($null -ne $ping -and $ping -match '"version":"1\.0\.6"') { Write-Host "PASS: fallback relaunch works, ping 200 v1.0.6" } else { Write-Host "FAIL: fallback relaunch broken" }
+if ($null -ne $ping -and $ping -match '"version":"1\.0\.8"') { Write-Host "PASS: fallback relaunch works, ping 200 v1.0.8" } else { Write-Host "FAIL: fallback relaunch broken" }
 
 $after = if (Test-Path $fallback) { (Get-ChildItem $fallback -Recurse -File).Count } else { 0 }
 Write-Host ("fallback dir files after (recursive, incl. exe copy): " + $after)

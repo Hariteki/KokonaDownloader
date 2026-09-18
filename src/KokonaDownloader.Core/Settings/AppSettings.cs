@@ -5,17 +5,6 @@ namespace KokonaDownloader.Core.Settings;
 
 public enum ThemeMode { System, Light, Dark }
 
-/// <summary>窗口透明度模式（在主题色基础上叠加）。</summary>
-public enum TransparencyMode
-{
-    /// <summary>不透明：实心背景 + Mica 磨砂（默认）。</summary>
-    Opaque = 0,
-    /// <summary>磨砂透明：Acrylic 背景 + 半透明主题色。</summary>
-    Frosted = 1,
-    /// <summary>黑色纯透明：无背景 + 极低透明度黑色。</summary>
-    BlackTransparent = 2
-}
-
 /// <summary>应用设置（持久化到 %APPDATA%/KokonaDownloader/settings.json）。</summary>
 public sealed class AppSettings
 {
@@ -31,13 +20,6 @@ public sealed class AppSettings
     public ThemeMode Theme { get; set; } = ThemeMode.Dark;
     /// <summary>主题配色 id（见 ThemeCatalog，"system" 表示跟随系统强调色）。</summary>
     public string ThemeColorId { get; set; } = KokonaDownloader.Core.Themes.ThemeCatalog.SystemId;
-    /// <summary>窗口透明度模式（Opaque / Frosted / BlackTransparent）。</summary>
-    public TransparencyMode Transparency { get; set; } = TransparencyMode.Opaque;
-    /// <summary>
-    /// 磨砂浓度（仅 Frosted 模式生效）：0=更透明 … 1=更不透明，0.5=原始观感。
-    /// 映射到 Acrylic 染色/明度层不透明度（见 ThemeService.FrostedParams）。
-    /// </summary>
-    public double FrostedStrength { get; set; } = 0.5;
     public long GlobalSpeedLimit { get; set; }
     public bool LaunchAtStartup { get; set; }
     public bool MinimizeToTrayOnClose { get; set; } = true;

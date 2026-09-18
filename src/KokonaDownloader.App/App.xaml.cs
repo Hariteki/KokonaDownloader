@@ -54,8 +54,6 @@ public partial class App : Application
         File.Move(path, path + ".1", overwrite: true);
     }
 
-    private static SplashWindow? _splash;
-
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         // 命令行中的磁力链接（magnet: 协议唤起）
@@ -81,28 +79,6 @@ public partial class App : Application
             catch { }
             Exit();
             return;
-        }
-
-        // 启动动画：立即显示，让用户知道应用已启动（首次启动等待较久时尤为关键）。
-        // 注意：OnLaunched 返回前消息泵不运行，此处只是创建窗口，画面在返回后立刻绘出。
-        if (!TryCreateSplash())
-        {
-            // 创建失败（如 WinUI 组件缺失）：等消息泵启动后重试一次；
-            // 再失败也不阻塞启动——主窗口照常显示，用户依然有明确反馈。
-            try
-            {
-                var retryTimer = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread().CreateTimer();
-                retryTimer.Interval = TimeSpan.FromMilliseconds(300);
-                retryTimer.IsRepeating = false;
-                retryTimer.Tick += (_, _) =>
-                {
-                    if (_splash != null) return;
-                    if (TryCreateSplash()) Log("启动动画窗口重试创建成功");
-                    else Log("启动动画窗口重试仍失败，仅显示主窗口");
-                };
-                retryTimer.Start();
-            }
-            catch (Exception exRetry) { Log($"调度启动动画重试失败: {exRetry.Message}"); }
         }
 
         Aria2Path = Path.Combine(AppContext.BaseDirectory, "aria2c.exe");
@@ -147,32 +123,7 @@ public partial class App : Application
         {
             MainWin.Activate();
         }
-
-        // 主窗口流程已就绪：请求关闭启动动画。真正的关闭由窗口内的 DispatcherQueue 计时器
-        // 在最短展示时长之后执行——此刻消息泵尚未运行，立即 Close 会让启动动画从未被看见。
-        DismissSplash();
     }
-
-    /// <summary>创建并激活启动动画窗口。成功返回 true；失败记录日志并返回 false（不抛出）。</summary>
-    private static bool TryCreateSplash()
-    {
-        try
-        {
-            _splash = new SplashWindow();
-            _splash.ScheduleFallbackClose();
-            _splash.Activate();
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _splash = null;
-            Log($"启动动画窗口创建失败: {ex.Message}");
-            return false;
-        }
-    }
-
-    /// <summary>关闭启动动画（幂等；窗口内部负责延后到最短展示时长）。</summary>
-    public static void DismissSplash() => _splash?.RequestDismiss();
 
     /// <summary>显示并激活主窗口（托盘双击 / 单实例唤醒 / 通知点击）。</summary>
     public static void ShowMainWindow()

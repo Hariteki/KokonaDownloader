@@ -73,7 +73,7 @@ public sealed class AppHost : IAsyncDisposable
     /// <summary>
     /// 设置变更 → 引擎热更新。**只下发真正变化的字段**：
     /// 历史上这里对每次 Changed 都无条件下发全局限速与 tracker 两条 RPC，
-    /// 于是切换主题色、拖动磨砂浓度滑块这类与引擎无关的操作也会各打两次 aria2 调用。
+    /// 于是切换主题色这类与引擎无关的操作也会各打两次 aria2 调用。
     /// </summary>
     private async void OnSettingsChanged(object? sender, EventArgs e)
     {
