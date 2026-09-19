@@ -117,7 +117,8 @@ async function verifyKey(settings) {
 
 /**
  * 转发下载任务到客户端。
- * 返回 { ok, gid, duplicate }（duplicate=客户端任务列表已存在同 URL 任务）；失败时抛出带 code 的错误：
+ * 返回 { ok, gid, duplicate, confirm }（duplicate=客户端任务列表已存在同 URL 任务；
+ * confirm=单条磁力链接，客户端已弹确认窗口等待用户决定）；失败时抛出带 code 的错误：
  *   offline=无法连接 / unauthorized=密钥错误 / rejected=客户端拒绝 / http=其他错误
  */
 async function forwardDownload(settings, payload) {
@@ -150,7 +151,7 @@ async function forwardDownload(settings, payload) {
     err.code = resp.status === 400 ? 'rejected' : 'http';
     throw err;
   }
-  return { ok: true, gid: body && body.gid, duplicate: !!(body && body.duplicate) };
+  return { ok: true, gid: body && body.gid, duplicate: !!(body && body.duplicate), confirm: !!(body && body.confirm) };
 }
 
 // ---------- 连接状态 ----------

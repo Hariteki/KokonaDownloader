@@ -101,6 +101,9 @@ public sealed class ApiService : IDisposable
     private readonly Action<string> _log;
     private CancellationTokenSource? _cts;
     private Task? _loop;
+    /// <summary>请求处理并发闸门：原先每请求一个 Task.Run 无上限，病态客户端可无限堆积处理器任务。
+    /// 回环+鉴权下风险低，但仍设上限；达到上限时直接 503 拒绝（排队会让每个等待请求继续占着 socket）。</summary>
+    private readonly SemaphoreSlim _requestGate = new(64, 64);
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -142,7 +145,22 @@ public sealed class ApiService : IDisposable
             HttpListenerContext ctx;
             try { ctx = await _listener.GetContextAsync().ConfigureAwait(false); }
             catch { break; }
-            _ = Task.Run(() => HandleSafe(ctx), ct);
+            if (!_requestGate.Wait(0)) // 非阻塞尝试获取（本机 SDK 的 SemaphoreSlim 无 TryWait 重载，Wait(0) 语义相同）
+            {
+                // 并发上限已满：立即拒绝，避免无界排队（每个排队的请求还会一直占着 socket）
+                try
+                {
+                    ctx.Response.StatusCode = 503;
+                    ctx.Response.Close();
+                }
+                catch { }
+                continue;
+            }
+            _ = Task.Run(async () =>
+            {
+                try { await HandleSafe(ctx).ConfigureAwait(false); }
+                finally { _requestGate.Release(); }
+            }, ct);
         }
     }
 

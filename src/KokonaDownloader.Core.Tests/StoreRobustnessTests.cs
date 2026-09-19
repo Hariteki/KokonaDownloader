@@ -83,6 +83,26 @@ public class StoreRobustnessTests : IDisposable
     }
 
     [Fact]
+    public void 墓碑_批量撤销时全部命中条目都被移除()
+    {
+        // 回归：Unmark 曾用 Any(_hashes.Remove) 短路，首个命中后其余墓碑不会被撤销。
+        var dir = @"C:\Downloads";
+        var file = P("aria2.session");
+        File.WriteAllText(file, SessionEntry("http://a.example/one.bin", dir)
+                              + SessionEntry("http://b.example/two.bin", dir));
+
+        var store = new TombstoneStore(P("tombstones.json"));
+        store.Mark(new[] { "http://a.example/one.bin", "http://b.example/two.bin" }, dir);
+        Assert.Equal(2, store.PurgeSessionFile(file));
+
+        // 两条一起重新添加：一次 Unmark 必须撤销**全部**墓碑
+        File.WriteAllText(file, SessionEntry("http://a.example/one.bin", dir)
+                              + SessionEntry("http://b.example/two.bin", dir));
+        store.Unmark(new[] { "http://a.example/one.bin", "http://b.example/two.bin" }, dir);
+        Assert.Equal(0, store.PurgeSessionFile(file));
+    }
+
+    [Fact]
     public void 墓碑_无记录时不改动会话文件()
     {
         var file = P("aria2.session");

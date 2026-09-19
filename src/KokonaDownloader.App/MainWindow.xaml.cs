@@ -663,17 +663,22 @@ public partial class MainWindow : Window
     private async void OnNewClick(object sender, RoutedEventArgs e)
     {
         App.Log("[ui] 新建下载按钮点击");
-        await ShowNewDownloadDialog();
+        try { await ShowNewDownloadDialog(); }
+        catch (Exception ex) { App.Log($"[ui] 新建下载对话框异常: {ex.Message}"); }
     }
 
     private async void OnPauseAllClick(object sender, RoutedEventArgs e)
     {
-        if (App.Host?.Engine != null) await App.Host.Engine.PauseAllAsync();
+        if (App.Host?.Engine == null) return;
+        try { await App.Host.Engine.PauseAllAsync(); }
+        catch (Exception ex) { App.Log($"[ui] 全部暂停失败: {ex.Message}"); }
     }
 
     private async void OnResumeAllClick(object sender, RoutedEventArgs e)
     {
-        if (App.Host?.Engine != null) await App.Host.Engine.ResumeAllAsync();
+        if (App.Host?.Engine == null) return;
+        try { await App.Host.Engine.ResumeAllAsync(); }
+        catch (Exception ex) { App.Log($"[ui] 全部恢复失败: {ex.Message}"); }
     }
 
     private void OnSettingsClick(object sender, RoutedEventArgs e) => ShowSettingsDialog();
@@ -731,7 +736,9 @@ public partial class MainWindow : Window
 
     private async void OnItemDeleteClick(object sender, RoutedEventArgs e)
     {
-        if (ItemFromButton(sender) is { } vm) await ConfirmDeleteAsync(vm);
+        if (ItemFromButton(sender) is not { } vm) return;
+        try { await ConfirmDeleteAsync(vm); }
+        catch (Exception ex) { App.Log($"[ui] 删除任务异常: {ex.Message}"); }
     }
 
     private void OnTaskRightTapped(object sender, RightTappedRoutedEventArgs e)
@@ -916,22 +923,27 @@ public partial class MainWindow : Window
     {
         var list = SelectedTasks().ToList();
         if (list.Count == 0) return;
-        var result = await ShowDialogAsync(() => new ContentDialog
+        try
         {
-            Title = "批量删除",
-            Content = $"确定要删除选中的 {list.Count} 个任务吗？",
-            PrimaryButtonText = "删除任务和文件",
-            SecondaryButtonText = "仅删除任务",
-            CloseButtonText = "取消",
-            DefaultButton = ContentDialogButton.Close,
-            PrimaryButtonStyle = (Style)RootGrid.Resources["DangerButtonStyle"],
-            XamlRoot = RootGrid.XamlRoot
-        });
-        if (App.Host?.Engine == null || result == ContentDialogResult.None) return;
-        var deleteFile = result == ContentDialogResult.Primary;
-        foreach (var vm in list)
-            await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile);
-        ActiveList.SelectedItems.Clear();
+            var result = await ShowDialogAsync(() => new ContentDialog
+            {
+                Title = "批量删除",
+                Content = $"确定要删除选中的 {list.Count} 个任务吗？",
+                PrimaryButtonText = "删除任务和文件",
+                SecondaryButtonText = "仅删除任务",
+                CloseButtonText = "取消",
+                DefaultButton = ContentDialogButton.Close,
+                PrimaryButtonStyle = (Style)RootGrid.Resources["DangerButtonStyle"],
+                XamlRoot = RootGrid.XamlRoot
+            });
+            if (App.Host?.Engine == null || result == ContentDialogResult.None) return;
+            var deleteFile = result == ContentDialogResult.Primary;
+            foreach (var vm in list)
+                await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile);
+            // 全部成功才清选择；中途失败保留选中，便于用户重试
+            ActiveList.SelectedItems.Clear();
+        }
+        catch (Exception ex) { App.Log($"[ui] 批量删除失败: {ex.Message}"); }
     }
 
     private IEnumerable<TaskItemViewModel> SelectedTasks() =>

@@ -60,10 +60,16 @@ public sealed class TombstoneStore
     /// <summary>同 URL+目录被再次添加时撤销墓碑。</summary>
     public void Unmark(IEnumerable<string> urls, string? dir)
     {
-        bool any;
+        var any = false;
         lock (_lock)
         {
-            any = urls.Select(u => HashOf(u, dir)).Any(_hashes.Remove);
+            // 必须逐个移除：Any(predicate) 在首个命中处短路，
+            // 批量撤销时第一个命中之后的墓碑都不会被撤销。
+            foreach (var u in urls)
+            {
+                if (string.IsNullOrWhiteSpace(u)) continue;
+                if (_hashes.Remove(HashOf(u, dir))) any = true;
+            }
         }
         if (any) Save();
     }

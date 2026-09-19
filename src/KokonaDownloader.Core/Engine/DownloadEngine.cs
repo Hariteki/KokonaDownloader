@@ -35,7 +35,8 @@ public sealed class DownloadEngine : IAsyncDisposable
     private CancellationTokenSource? _pollCts;
     private Task? _pollTask;
     private readonly ConcurrentDictionary<string, TaskState> _lastStates = new();
-    private string? _lastPollSig;
+    /// <summary>上一轮轮询的任务指纹（FNV-32 无分配整数，见 PollLoopAsync 诊断打点）。</summary>
+    private int _lastPollSig;
     /// <summary>本会话内新建任务的 Gid 标记：轮询首次上报时消费并随事件携带 IsNewTask。</summary>
     private readonly ConcurrentDictionary<string, byte> _newTaskGids = new();
 
@@ -304,14 +305,25 @@ public sealed class DownloadEngine : IAsyncDisposable
                     NumStopped = gstat?.NumStopped ?? 0
                 };
 
-                // 诊断打点：任务集合或统计变化时记录一次（空轮询静默）
-                var taskSig = string.Join(",", tasks.Select(t => $"{t.Gid[..Math.Min(8, t.Gid.Length)]}:{t.State}"));
-                var pollSig = $"{stats.NumActive}/{stats.NumWaiting}/{stats.NumStopped}|{taskSig}";
-                if (pollSig != _lastPollSig)
+                // 诊断打点：任务集合或统计变化时记录一次（空轮询静默）。
+                // 每轮比较用无分配的整数指纹（gid+状态折叠 + stopped 计数）；
+                // 只有真的检测到变化才拼完整签名字符串用于日志——原先每轮都拼，
+                // 1000 任务时每轮产生数十 KB 字符串垃圾（每秒一次）。
+                var sig = unchecked((int)2166136261u); // FNV-32 offset basis（超出 int.MaxValue，取低 32 位）
+                foreach (var t in tasks)
                 {
-                    _lastPollSig = pollSig;
+                    sig = unchecked(sig * 16777619 + t.Gid.GetHashCode());
+                    sig = unchecked(sig * 16777619 + (int)t.State);
+                }
+                sig = unchecked(sig * 16777619 + stats.NumStopped);
+                if (sig != _lastPollSig)
+                {
+                    _lastPollSig = sig;
                     if (stats.NumActive + stats.NumWaiting + stats.NumStopped > 0)
+                    {
+                        var taskSig = string.Join(",", tasks.Select(t => $"{t.Gid[..Math.Min(8, t.Gid.Length)]}:{t.State}"));
                         _log($"轮询 active={stats.NumActive} waiting={stats.NumWaiting} stopped={stats.NumStopped} 任务=[{taskSig}]");
+                    }
                 }
 
                 // 检测状态变化并触发事件
@@ -597,7 +609,11 @@ public sealed class DownloadEngine : IAsyncDisposable
         for (var i = 0; i < list.Count; i++)
         {
             if (!list[i].Urls.Any(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase)))
+            {
+                // 与单任务路径一致：先剔除"只是把 URL 末段重复一遍"的伪文件名，再做重名冲突处理
+                list[i] = DropUrlDerivedFileName(list[i]);
                 list[i] = ApplyUniqueFileName(list[i]);
+            }
         }
         var numbers = list.Select(_ => NextTaskNumber()).ToList();
         var gids = await _client.AddUriBatchAsync(list, ct).ConfigureAwait(false);
@@ -613,7 +629,8 @@ public sealed class DownloadEngine : IAsyncDisposable
             {
                 Gid = gids[i],
                 TaskNumber = numbers[i],
-                Name = list[i].FileName ?? string.Empty,
+                // 与单任务路径一致：未指定文件名时用 URL 末段作列表显示占位（aria2 上报真实路径后更新）
+                Name = list[i].FileName ?? GuessFileNameFromUrl(list[i].Urls.FirstOrDefault()) ?? string.Empty,
                 Urls = list[i].Urls,
                 Referer = list[i].Referer,
                 AddedAt = DateTime.Now

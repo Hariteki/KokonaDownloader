@@ -25,15 +25,12 @@
 
 ## 开发者指南
 
-> 📘 **接手维护请先读 [`项目维护手册.md`](项目维护手册.md)**：命令速查、架构与不变量、
-> 踩坑速查、当前进度/待办、发版流程一步不漏（面向后续维护者与 AI 协作）。
-
 ### 软件架构
 
 海兔下载器分为三个部分：
 
 ```
-┌─────────────────┐     HTTP/WebSocket      ┌─────────────────────┐
+┌─────────────────┐         HTTP            ┌─────────────────────┐
 │  浏览器扩展     │  ═══════════════════════► │  桌面客户端 (WinUI3) │
 │  (Manifest V3)  │     (本地 API + 密钥)    │  .NET 8 + WASDK     │
 └─────────────────┘                         └──────────┬──────────┘
@@ -58,14 +55,14 @@
 | 浏览器扩展 | JavaScript / Manifest V3 |
 | 下载引擎 | Aria2 (GPL v2) |
 | 客户端 ↔ 扩展 | HTTP REST API，本地回环地址，带密钥鉴权 |
-| 客户端 ↔ Aria2 | JSON-RPC over WebSocket |
+| 客户端 ↔ Aria2 | JSON-RPC（HTTP POST，本地回环） |
 
 ### 目录结构
 
 ```
 ├── src/
 │   ├── KokonaDownloader.App/         WinUI 3 桌面客户端
-│   ├── KokonaDownloader.Core/        核心库：Aria2 封装、设置、计划、通知
+│   ├── KokonaDownloader.Core/        核心库：Aria2 封装、设置、本地 API、通知
 │   ├── KokonaDownloader.Core.Tests/  单元测试
 │   └── KokonaDownloader.UiTests/     UI 冒烟测试
 ├── extension/                        浏览器扩展源码（直接加载即可用）

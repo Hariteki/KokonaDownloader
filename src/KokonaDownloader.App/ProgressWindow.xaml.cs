@@ -236,19 +236,30 @@ public partial class ProgressWindow : Window
         catch { }
     }
 
-    private void OnOpenFolderClick(object sender, RoutedEventArgs e)
+    private async void OnOpenFolderClick(object sender, RoutedEventArgs e)
     {
-        var t = GetLastTask();
-        if (t != null)
+        try
         {
-            var dir = !string.IsNullOrEmpty(t.FilePath) ? Path.GetDirectoryName(t.FilePath) : t.Dir;
-            Shell.OpenFolder(dir, t.FilePath);
+            var t = await GetLastTaskAsync();
+            if (t != null)
+            {
+                var dir = !string.IsNullOrEmpty(t.FilePath) ? Path.GetDirectoryName(t.FilePath) : t.Dir;
+                Shell.OpenFolder(dir, t.FilePath);
+            }
         }
+        catch (Exception ex) { App.Log($"[ui] 打开文件夹失败: {ex.Message}"); }
     }
 
-    private DownloadTaskInfo? GetLastTask()
+    /// <summary>取本任务当前状态（异步，不阻塞 UI 线程）。
+    /// 原先用 GetAwaiter().GetResult() 同步等 RPC：aria2 无响应时 UI 线程会冻结至超时。</summary>
+    private async Task<DownloadTaskInfo?> GetLastTaskAsync()
     {
-        try { return App.Host?.Engine.GetTaskAsync(_gid).GetAwaiter().GetResult(); }
+        var engine = App.Host?.Engine;
+        if (engine == null || !engine.IsRunning) return null;
+        try
+        {
+            return await engine.GetTaskAsync(_gid);
+        }
         catch { return null; }
     }
 
