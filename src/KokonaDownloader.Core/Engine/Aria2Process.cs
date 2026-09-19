@@ -112,8 +112,10 @@ public sealed class Aria2Process : IDisposable
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         _process = new Process { StartInfo = psi };
-        _process.OutputDataReceived += (_, e) => { if (e.Data != null) _log?.Invoke($"[aria2] {e.Data}"); };
-        _process.ErrorDataReceived += (_, e) => { if (e.Data != null) _log?.Invoke($"[aria2!err] {e.Data}"); };
+        // aria2c 控制台输出里大量是空白/纯空格行（实测占历史日志 96%）：只记录有实际内容的行，
+        // 否则 app.log 会以 ~8MB/天 无界膨胀且几乎全是噪音。
+        _process.OutputDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) _log?.Invoke($"[aria2] {e.Data}"); };
+        _process.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) _log?.Invoke($"[aria2!err] {e.Data}"); };
         _process.Start();
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();

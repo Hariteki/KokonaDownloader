@@ -23,6 +23,9 @@ public partial class ProgressWindow : Window
     /// <summary>创建时刻：回收时按"最旧的已结束窗口"优先。</summary>
     public DateTime CreatedAt { get; } = DateTime.UtcNow;
 
+    /// <summary>级联槽位（由主界面分配）：决定小窗相对屏幕中心的错开位置，避免并发小窗完全堆叠。</summary>
+    public int Slot { get; set; }
+
     public ProgressWindow(string gid, string taskName, bool isBt = false)
     {
         _gid = gid;

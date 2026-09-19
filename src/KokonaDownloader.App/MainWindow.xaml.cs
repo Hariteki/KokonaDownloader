@@ -40,6 +40,12 @@ public partial class MainWindow : Window
     private static readonly TimeSpan WindowBurstInterval = TimeSpan.FromSeconds(5);
     private readonly Queue<DateTime> _recentWindowCreations = new();
 
+    /// <summary>两次实际建窗之间的最小间隔：XAML 加载 + 原生背景挂载 + 窗口激活都是重活，
+    /// 密集连发（批量任务）时实测会命中 XAML 层原生故障（Microsoft.UI.Xaml.dll 0xc000027b，
+    /// 表现为未处理 XamlParseException 后进程直接崩溃）。拉开间隔即可规避。</summary>
+    private static readonly TimeSpan MinWindowCreationGap = TimeSpan.FromMilliseconds(600);
+    private DateTime _lastWindowCreationUtc = DateTime.MinValue;
+
     /// <summary>引擎最近一次轮询推送的快照与统计（StatsUpdated 事件写入，界面刷新时直接渲染）。</summary>
     private volatile List<DownloadTaskInfo>? _snapshot;
     private volatile GlobalStat? _stats;
@@ -251,13 +257,26 @@ public partial class MainWindow : Window
                 try
                 {
                     var win = new ProgressWindow(t.Gid, t.Name, t.IsBt);
+                    // 先分配槽位再登记：AssignWindowSlot 扫描存活窗口，若先登记会把新窗自身（默认 Slot=0）
+                    // 误判为占用 0 号位，导致首个窗口错位、满员时回退到 5 号位造成重叠
+                    win.Slot = AssignWindowSlot();
                     win.Closed += (_, _) => _progressWindows.Remove(t.Gid);
                     _progressWindows[t.Gid] = win;
                     SizeAndPlaceProgressWindow(win);
-                    win.Activate();
-                    // 下载可能由扩展在后台触发，必须强制把小窗拉到前台，否则用户看不到
-                    WindowEffects.ForceForeground(win);
-                    App.Log($"[ui] 进度小窗已创建 gid={t.Gid} title={t.Name}");
+                    // 激活与强制前台延迟到下一调度周期：把"建窗（XAML 加载 + 原生背景挂载）"与
+                    // "窗口激活"拆到不同帧，避免高并发下同一帧内密集触发原生调用（实测会命中
+                    // XAML 层原生故障导致进程崩溃）。窗口若在此之前已关闭，Activate 异常被吞掉。
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        try
+                        {
+                            win.Activate();
+                            // 下载可能由扩展在后台触发，必须强制把小窗拉到前台，否则用户看不到
+                            WindowEffects.ForceForeground(win);
+                        }
+                        catch (Exception ex) { App.Log($"激活进度小窗失败: {ex.Message}"); }
+                    });
+                    App.Log($"[ui] 进度小窗已创建 gid={t.Gid} title={t.Name} slot={win.Slot}");
                 }
                 catch (Exception ex) { App.Log($"打开进度小窗失败: {ex.Message}"); }
             }
@@ -283,6 +302,15 @@ public partial class MainWindow : Window
     private bool ShouldCreateProgressWindow(string gid)
     {
         var now = DateTime.UtcNow;
+
+        // 最小建窗间隔：距上次实际建窗不足 MinWindowCreationGap 时本次不建（任务仍可见于主列表）。
+        // 这是防 XAML 层原生故障的关键闸门——批量任务连发时把"建窗风暴"摊平成串行慢速创建。
+        if (now - _lastWindowCreationUtc < MinWindowCreationGap)
+        {
+            App.Log($"[ui] 进度小窗距上次创建不足 {MinWindowCreationGap.TotalMilliseconds:0}ms，跳过 gid={gid}");
+            return false;
+        }
+
         while (_recentWindowCreations.Count > 0 && now - _recentWindowCreations.Peek() > WindowBurstInterval)
             _recentWindowCreations.Dequeue();
 
@@ -312,10 +340,12 @@ public partial class MainWindow : Window
         }
 
         _recentWindowCreations.Enqueue(now);
+        _lastWindowCreationUtc = now;
         return true;
     }
 
-    /// <summary>把进度小窗放到主显示器屏幕正中央，尺寸固定为紧凑卡片。</summary>
+    /// <summary>把进度小窗放到主显示器屏幕中央附近，尺寸固定为紧凑卡片。
+    /// 并发小窗按 Slot 级联错开（第 0 号正中央，之后每个向右下移一格），不再全部堆叠在同一坐标。</summary>
     private void SizeAndPlaceProgressWindow(ProgressWindow win)
     {
         try
@@ -344,9 +374,25 @@ public partial class MainWindow : Window
                 x = mainPos.X + (mainSize.Width - w) / 2;
                 y = mainPos.Y + (mainSize.Height - h) / 2;
             }
+
+            // 级联偏移：slot 0 保持正中央，slot n 向右下错开 n 格（物理像素随 DPI 缩放），
+            // 保证并发小窗互不完全重叠、各自可见
+            x += (int)(win.Slot * 28 * scale);
+            y += (int)(win.Slot * 20 * scale);
+
             win.AppWindow.Move(new Windows.Graphics.PointInt32(Math.Max(0, x), Math.Max(0, y)));
         }
         catch { }
+    }
+
+    /// <summary>为新小窗分配级联槽位：取当前存活窗口未占用的最小槽位（0..MaxLiveProgressWindows-1）。
+    /// 窗口关闭后从 _progressWindows 移除，其槽位自动释放给后续新窗。</summary>
+    private int AssignWindowSlot()
+    {
+        var used = new HashSet<int>(_progressWindows.Values.Select(w => w.Slot));
+        for (int s = 0; s < MaxLiveProgressWindows; s++)
+            if (!used.Contains(s)) return s;
+        return MaxLiveProgressWindows - 1;
     }
 
     /// <summary>获取主窗口所在显示器的工作区信息（物理像素）。</summary>
