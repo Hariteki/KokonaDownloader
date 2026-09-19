@@ -151,13 +151,14 @@ public class ExtensionContractTests : IAsyncLifetime
     [Fact]
     public async Task 扩展来源CORS可用()
     {
-        // 扩展 fetch 携带 Origin: chrome-extension://...，服务端必须放行预检
+        // 扩展 fetch 携带 Origin: chrome-extension://...，服务端必须放行预检，
+        // 且只回显该来源（不再用通配 *，否则任意网页都能带密钥调用本地 API）
         var msg = new HttpRequestMessage(HttpMethod.Options, "/api/download");
         msg.Headers.Add("Origin", "chrome-extension://abcdefghijklmnop");
         msg.Headers.Add("Access-Control-Request-Method", "POST");
         var resp = await _http.SendAsync(msg);
         Assert.Equal(HttpStatusCode.NoContent, resp.StatusCode);
-        Assert.Equal("*", resp.Headers.GetValues("Access-Control-Allow-Origin").First());
+        Assert.Equal("chrome-extension://abcdefghijklmnop", resp.Headers.GetValues("Access-Control-Allow-Origin").First());
         var allowHeaders = string.Join(",", resp.Headers.GetValues("Access-Control-Allow-Headers"));
         Assert.Contains("X-Kokona-Secret", allowHeaders);
     }

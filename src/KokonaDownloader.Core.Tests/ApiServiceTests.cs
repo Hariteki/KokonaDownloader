@@ -112,14 +112,94 @@ public class ApiServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task OPTIONS预检返回204带CORS头()
+    public async Task OPTIONS预检返回204且只回显受信任来源()
     {
         var msg = new HttpRequestMessage(HttpMethod.Options, "/api/download");
         msg.Headers.Add("Origin", "chrome-extension://abcdef");
         var resp = await _http.SendAsync(msg);
         Assert.Equal(HttpStatusCode.NoContent, resp.StatusCode);
-        Assert.Equal("*", resp.Headers.GetValues("Access-Control-Allow-Origin").First());
+        // 只回显具体来源，不再用通配 *（通配 + 自定义头鉴权 = 任意网页可带密钥调用本 API）
+        Assert.Equal("chrome-extension://abcdef", resp.Headers.GetValues("Access-Control-Allow-Origin").First());
         Assert.Contains("X-Kokona-Secret", string.Join(",", resp.Headers.GetValues("Access-Control-Allow-Headers")));
+    }
+
+    [Fact]
+    public async Task 不受信任的网页来源被拒绝()
+    {
+        // 任意网页带密钥调用本地 API：必须在鉴权之前挡掉。
+        // 历史行为是 Allow-Origin: * → 网页可读响应，配合外泄密钥即可无声投递下载任务。
+        foreach (var origin in new[] { "https://evil.example", "http://evil.example", "http://127.0.0.1.evil.com" })
+        {
+            var msg = Authed(HttpMethod.Post, "/api/download", new { url = "http://127.0.0.1:1/x.bin" });
+            msg.Headers.Add("Origin", origin);
+            var resp = await _http.SendAsync(msg);
+            Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
+            Assert.False(resp.Headers.Contains("Access-Control-Allow-Origin"));
+        }
+
+        // 预检同样拒绝：浏览器不会发出真实请求（自定义头必然触发预检）
+        var pre = new HttpRequestMessage(HttpMethod.Options, "/api/download");
+        pre.Headers.Add("Origin", "https://evil.example");
+        pre.Headers.Add("Access-Control-Request-Headers", "x-kokona-secret");
+        var preResp = await _http.SendAsync(pre);
+        Assert.Equal(HttpStatusCode.Forbidden, preResp.StatusCode);
+        Assert.False(preResp.Headers.Contains("Access-Control-Allow-Origin"));
+
+        // ping 免鉴权也不该给不受信任来源放行（否则可被用于探测客户端是否在运行）
+        var ping = new HttpRequestMessage(HttpMethod.Get, "/api/ping");
+        ping.Headers.Add("Origin", "https://evil.example");
+        Assert.Equal(HttpStatusCode.Forbidden, (await _http.SendAsync(ping)).StatusCode);
+    }
+
+    [Fact]
+    public async Task 无来源与回环来源仍可用()
+    {
+        // 无 Origin：扩展 Service Worker 之外的脚本、curl、本项目测试脚本
+        Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(Authed(HttpMethod.Get, "/api/tasks"))).StatusCode);
+
+        // 回环页面：本地调试页 / 本地测试站点
+        var msg = Authed(HttpMethod.Get, "/api/tasks");
+        msg.Headers.Add("Origin", "http://localhost:8080");
+        var resp = await _http.SendAsync(msg);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        Assert.Equal("http://localhost:8080", resp.Headers.GetValues("Access-Control-Allow-Origin").First());
+    }
+
+    [Fact]
+    public async Task 设置补丁内容未变时不触发变更事件()
+    {
+        // 逐字段比对后 return changed：内容相同的 PATCH 不应触发 Changed
+        // （Changed → ThemeService.Apply 全量主题重算 + settings.json 落盘，实测约 240ms CPU/次）
+        var fired = 0;
+        void Handler(object? _, EventArgs __) => Interlocked.Increment(ref fired);
+        _settings.Changed += Handler;
+        try
+        {
+            var snapshot = new
+            {
+                defaultDownloadDir = _settings.Current.DefaultDownloadDir,
+                maxConcurrentDownloads = _settings.Current.MaxConcurrentDownloads,
+                defaultConnections = _settings.Current.DefaultConnections,
+                notificationsEnabled = _settings.Current.NotificationsEnabled,
+                globalSpeedLimit = _settings.Current.GlobalSpeedLimit
+            };
+            for (var i = 0; i < 3; i++)
+            {
+                var r = await _http.SendAsync(Authed(HttpMethod.Post, "/api/settings", snapshot));
+                Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+            }
+            Assert.Equal(0, fired);
+
+            // 真的改了才触发
+            var r2 = await _http.SendAsync(Authed(HttpMethod.Post, "/api/settings",
+                new { maxConcurrentDownloads = _settings.Current.MaxConcurrentDownloads + 1 }));
+            Assert.Equal(HttpStatusCode.OK, r2.StatusCode);
+            Assert.Equal(1, fired);
+        }
+        finally
+        {
+            _settings.Changed -= Handler;
+        }
     }
 
     [Fact]

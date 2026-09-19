@@ -165,11 +165,27 @@ public sealed class ApiService : IDisposable
         var req = ctx.Request;
         var resp = ctx.Response;
 
-        // CORS
-        resp.Headers["Access-Control-Allow-Origin"] = "*";
-        resp.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-        resp.Headers["Access-Control-Allow-Headers"] = "Content-Type, X-Kokona-Secret, Authorization";
-        resp.Headers["Access-Control-Max-Age"] = "600";
+        // 来源校验：只放行浏览器扩展与回环地址页面。
+        // 历史上这里是 Access-Control-Allow-Origin: *，而鉴权依赖自定义头（X-Kokona-Secret），
+        // 自定义头必然触发 CORS 预检，而预检对**任何**来源都回 204 并允许该头 —— 于是任意网页
+        // 都能带密钥调用本 API 并读取响应体（投递下载 / 删除任务 / 改下载目录），
+        // 只要密钥以任何方式外泄即形成"访问一个网页就让用户机器无声开始下载"的链路。
+        var origin = req.Headers["Origin"];
+        if (!IsTrustedOrigin(origin))
+        {
+            _log($"API 拒绝不受信任的来源: {origin} {req.HttpMethod} {req.Url?.AbsolutePath}");
+            resp.StatusCode = 403;
+            return;
+        }
+        if (!string.IsNullOrEmpty(origin))
+        {
+            // 只回显受信任的具体来源（不再用 *），并声明响应按 Origin 变化
+            resp.Headers["Access-Control-Allow-Origin"] = origin;
+            resp.Headers["Vary"] = "Origin";
+            resp.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+            resp.Headers["Access-Control-Allow-Headers"] = "Content-Type, X-Kokona-Secret, Authorization";
+            resp.Headers["Access-Control-Max-Age"] = "600";
+        }
         if (req.HttpMethod == "OPTIONS")
         {
             resp.StatusCode = 204;
@@ -381,15 +397,51 @@ public sealed class ApiService : IDisposable
             }
             _settings.Update(s =>
             {
-                if (patch.DefaultDownloadDir != null) s.DefaultDownloadDir = patch.DefaultDownloadDir;
-                if (patch.MaxConcurrentDownloads is > 0 and <= 32) s.MaxConcurrentDownloads = patch.MaxConcurrentDownloads.Value;
-                if (patch.DefaultConnections is > 0 and <= 64) s.DefaultConnections = patch.DefaultConnections.Value;
-                if (patch.NotificationsEnabled.HasValue) s.NotificationsEnabled = patch.NotificationsEnabled.Value;
-                if (patch.Theme != null && Enum.TryParse<ThemeMode>(patch.Theme, true, out var theme)) s.Theme = theme;
-                if (patch.GlobalSpeedLimit is >= 0) s.GlobalSpeedLimit = patch.GlobalSpeedLimit!.Value;
-                if (patch.InterceptBrowserDownloads.HasValue) s.InterceptBrowserDownloads = patch.InterceptBrowserDownloads.Value;
-                if (patch.MinimizeToTrayOnClose.HasValue) s.MinimizeToTrayOnClose = patch.MinimizeToTrayOnClose.Value;
-                return true;
+                // 逐字段比对后返回"是否真的变了"：原先无条件 return true，
+                // 于是内容完全相同的 PATCH（扩展/脚本重复提交同一份设置）也会触发
+                // 一次全量主题重算 + 一次 settings.json 落盘（实测约 240ms CPU/次）。
+                var changed = false;
+                if (patch.DefaultDownloadDir != null && s.DefaultDownloadDir != patch.DefaultDownloadDir)
+                {
+                    s.DefaultDownloadDir = patch.DefaultDownloadDir;
+                    changed = true;
+                }
+                if (patch.MaxConcurrentDownloads is > 0 and <= 32 && s.MaxConcurrentDownloads != patch.MaxConcurrentDownloads.Value)
+                {
+                    s.MaxConcurrentDownloads = patch.MaxConcurrentDownloads.Value;
+                    changed = true;
+                }
+                if (patch.DefaultConnections is > 0 and <= 64 && s.DefaultConnections != patch.DefaultConnections.Value)
+                {
+                    s.DefaultConnections = patch.DefaultConnections.Value;
+                    changed = true;
+                }
+                if (patch.NotificationsEnabled.HasValue && s.NotificationsEnabled != patch.NotificationsEnabled.Value)
+                {
+                    s.NotificationsEnabled = patch.NotificationsEnabled.Value;
+                    changed = true;
+                }
+                if (patch.Theme != null && Enum.TryParse<ThemeMode>(patch.Theme, true, out var theme) && s.Theme != theme)
+                {
+                    s.Theme = theme;
+                    changed = true;
+                }
+                if (patch.GlobalSpeedLimit is >= 0 && s.GlobalSpeedLimit != patch.GlobalSpeedLimit!.Value)
+                {
+                    s.GlobalSpeedLimit = patch.GlobalSpeedLimit!.Value;
+                    changed = true;
+                }
+                if (patch.InterceptBrowserDownloads.HasValue && s.InterceptBrowserDownloads != patch.InterceptBrowserDownloads.Value)
+                {
+                    s.InterceptBrowserDownloads = patch.InterceptBrowserDownloads.Value;
+                    changed = true;
+                }
+                if (patch.MinimizeToTrayOnClose.HasValue && s.MinimizeToTrayOnClose != patch.MinimizeToTrayOnClose.Value)
+                {
+                    s.MinimizeToTrayOnClose = patch.MinimizeToTrayOnClose.Value;
+                    changed = true;
+                }
+                return changed;
             });
             await WriteJson(ctx, 200, new { ok = true }).ConfigureAwait(false);
         }
@@ -397,6 +449,22 @@ public sealed class ApiService : IDisposable
         {
             await WriteJson(ctx, 400, new { error = "bad_request" }).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// 是否放行该请求来源。
+    /// 无 Origin 头 = 非浏览器调用（扩展 Service Worker 内部 fetch、curl、本项目测试脚本），放行；
+    /// 浏览器来源只放行扩展（chrome-extension / edge 的 extension / moz-extension）与回环页面
+    /// （本机调试页、本地测试站点）。用 Uri 解析而不是前缀匹配，避免
+    /// "http://127.0.0.1.evil.com" 这类以回环地址开头的域名绕过。
+    /// </summary>
+    private static bool IsTrustedOrigin(string? origin)
+    {
+        if (string.IsNullOrEmpty(origin)) return true;
+        if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;
+        if (uri.Scheme is "chrome-extension" or "extension" or "moz-extension") return true;
+        if (uri.Scheme is not ("http" or "https")) return false;
+        return uri.IsLoopback;
     }
 
     private bool IsAuthorized(HttpListenerRequest req)

@@ -113,6 +113,18 @@ public sealed partial class SettingsWindow : Window
 
         _host.Settings.Update(s =>
         {
+            // 只在真的有字段变化时返回 true：原先无条件 return true，
+            // 于是"打开设置窗直接点保存"这种零改动操作也会触发一次全量主题重算
+            // （约 120 个资源键 × 2 个字典 + 所有窗口的可视树主题重求值）与一次落盘。
+            var changed = s.DefaultDownloadDir != dir
+                || s.MaxConcurrentDownloads != (int)MaxConcBox.Value
+                || s.DefaultConnections != (int)ConnBox.Value
+                || s.GlobalSpeedLimit != globalLimit
+                || s.NotificationsEnabled != NotifySwitch.IsOn
+                || s.InterceptBrowserDownloads != InterceptSwitch.IsOn
+                || s.MinimizeToTrayOnClose != MinimizeSwitch.IsOn
+                || s.LaunchAtStartup != StartupSwitch.IsOn;
+
             s.DefaultDownloadDir = dir;
             s.MaxConcurrentDownloads = (int)MaxConcBox.Value;
             s.DefaultConnections = (int)ConnBox.Value;
@@ -121,7 +133,7 @@ public sealed partial class SettingsWindow : Window
             s.InterceptBrowserDownloads = InterceptSwitch.IsOn;
             s.MinimizeToTrayOnClose = MinimizeSwitch.IsOn;
             s.LaunchAtStartup = StartupSwitch.IsOn;
-            return true;
+            return changed;
         });
         // 注册表立即生效
         StartupHelper.SetEnabled(StartupSwitch.IsOn);

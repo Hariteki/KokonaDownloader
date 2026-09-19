@@ -95,6 +95,14 @@ public static class ThemeService
         for (var i = Windows.Count - 1; i >= 0; i--)
             if (!Windows[i].TryGetTarget(out var w) || ReferenceEquals(w, window))
                 Windows.RemoveAt(i);
+
+        // 必须一并释放该窗口在 _backdrops 里的条目：_backdrops 用 Window 作**强键**，
+        // 而 Unregister 是窗口关闭时的最后一道清理。不释放的话，每个关闭过的窗口
+        // （进度小窗 / 设置窗 / 磁力确认窗）都会被静态字典永久强引用，窗口对象与它
+        // 整棵 Content 可视树都无法回收——长期会话下随小窗创建/回收单调增长。
+        // 注意不能依赖 ApplyTransparency 里的释放路径：窗口关闭后已不在 Windows 列表中，
+        // AllWindows() 再也不会遍历到它，那条路径永远不会执行。
+        ReleaseBackdrop(window);
     }
 
     private static void PruneWindows()
@@ -110,10 +118,27 @@ public static class ThemeService
             if (w.TryGetTarget(out var win)) yield return win;
     }
 
+    /// <summary>是否已经真正应用过一次主题。用于区分"首次"与"主题未变"：
+    /// Current 的初值是 Resolve("system") 的兜底色，若用户主题恰好是 system 且系统强调色
+    /// 就是兜底色（#FF0078D4，Windows 默认即为此），首次 Apply 会被误判成"未变化"而整轮跳过。</summary>
+    private static bool _appliedOnce;
+
     public static void Apply()
     {
         var id = App.Host?.Settings.Current.ThemeColorId;
-        Current = ThemeCatalog.Resolve(id, GetOsAccent());
+        var resolved = ThemeCatalog.Resolve(id, GetOsAccent());
+
+        // 主题真的没变就整轮跳过。SettingsStore.Changed 对**任何**设置变更都会触发
+        // （改并发数、改通知开关、点一次保存…），而每轮 Apply 的代价很高：
+        // RebuildOverrides 重建约 120 个键并写两遍（_overrides + 镜像进 Application.Resources，
+        // 每次新建约 240 个画刷），再对每个窗口做 RequestedTheme Dark→Light→Dark 的
+        // 整棵可视树重求值（XAML 最贵的操作之一）。实测：20 次内容完全相同的
+        // POST /api/settings → 127 次窗口级重应用 → 应用 CPU 增量 4.75s（约 240ms/次）。
+        // ResolvedTheme 是 record（成员全是 record struct），按值比较即可判定主题未变。
+        if (_appliedOnce && resolved.Equals(Current)) return;
+
+        _appliedOnce = true;
+        Current = resolved;
         RebuildOverrides();
         foreach (var w in AllWindows())
         {
@@ -185,7 +210,9 @@ public static class ThemeService
         }
         // 一并退订该窗口上关联到旧控制器/旧配置的事件处理器（否则会一直累积，见 WindowEffects.BackdropWiring）
         WindowEffects.DetachBackdropWiring(window);
-        window.SystemBackdrop = null;
+        // 这里由 Unregister 在窗口 Closed 时调用，窗口可能已在关闭流程中，写属性会抛
+        // COMException；必须自己兜住，否则异常会冲出 Window.Closed 事件处理器。
+        try { window.SystemBackdrop = null; } catch { }
     }
 
     /// <summary>
