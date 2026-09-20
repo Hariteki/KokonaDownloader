@@ -125,6 +125,36 @@ var KokonaLogic = (function () {
         return h.toString(16);
     }
 
+    /* 用户可见文案一律用 \u 转义写死，且本文件的中文注释只允许写成块注释：
+       logic.js 除了被扩展按 UTF-8 加载，还会被 tests/test_logic.js 用 cscript 按系统 ANSI 码页
+       eval。行注释若以中文收尾，其 UTF-8 尾字节可能被当作双字节字符的前导字节把换行一起吃掉，
+       于是紧跟的那行 var 声明连带被注释掉（表现为"变量未定义"），只在中文码页下复现，极难查。 */
+    var MSG_UNAUTHORIZED = '\u8fde\u63a5\u5bc6\u94a5\u9519\u8bef\uff0c\u8bf7\u70b9\u51fb\u5de5\u5177\u680f\u56fe\u6807\u91cd\u65b0\u7c98\u8d34\u5bc6\u94a5';
+    var MSG_BUSY = '\u5ba2\u6237\u7aef\u6b63\u5fd9\uff08\u5e76\u53d1\u8bf7\u6c42\u5df2\u6ee1\uff09\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5';
+    var MSG_HTTP_PREFIX = '\u5ba2\u6237\u7aef\u8fd4\u56de\u9519\u8bef HTTP ';
+
+    /**
+     * 把客户端 /api/download 的响应映射为扩展内部结果（纯函数）。
+     * 第四轮审计 N-2：这段映射原先埋在 background.js 的 async 流程里，只能靠浏览器手测；
+     * 抽出来后每种状态码都能被 cscript 套件断言（含并发闸门返回的 503）。
+     * 成功：{ ok: true, gid, duplicate, confirm }；失败：{ ok: false, code, message }。
+     * code（与 background.js 抛出的 err.code 一致）：
+     *   unauthorized 密钥错误（401）
+     *   rejected     客户端拒绝该请求（400，如 URL 不合法）
+     *   busy         客户端并发闸门已满（503），提示稍后重试
+     *   http         其他 HTTP 错误
+     * 客户端返回的 message 优先于内置文案（例如 400 会带上具体拒绝原因）。
+     */
+    function mapDownloadResponse(status, body) {
+        var msg = (body && body.message) ? String(body.message) : '';
+        if (status === 401) return { ok: false, code: 'unauthorized', message: MSG_UNAUTHORIZED };
+        if (status === 503) return { ok: false, code: 'busy', message: msg || MSG_BUSY };
+        if (!(status >= 200 && status < 300)) {
+            return { ok: false, code: status === 400 ? 'rejected' : 'http', message: msg || (MSG_HTTP_PREFIX + status) };
+        }
+        return { ok: true, gid: body && body.gid, duplicate: !!(body && body.duplicate), confirm: !!(body && body.confirm) };
+    }
+
     return {
         defaults: defaults,
         normalizeSettings: normalizeSettings,
@@ -135,6 +165,7 @@ var KokonaLogic = (function () {
         shouldCapture: shouldCapture,
         isFreshDownload: isFreshDownload,
         buildDownloadPayload: buildDownloadPayload,
+        mapDownloadResponse: mapDownloadResponse,
         urlKey: urlKey
     };
 })();

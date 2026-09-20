@@ -29,3 +29,8 @@ testsite/
 # UiTests 宿主每次运行都会重新生成的截图与失败诊断（不是 README 用的产品截图）
 screenshot/ui_*.png
 screenshot/diag_*.png
+
+# 本地测试夹具与临时记录（第四轮审计 N-7）：
+# files/ 是历史测试夹具（78 MB，全仓无任何脚本引用），infohash.txt 是 BT 测试的一次性产物。
+files/
+infohash.txt

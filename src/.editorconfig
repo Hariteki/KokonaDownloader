@@ -1,0 +1,41 @@
+# 分析器门槛（第四轮审计 P2-10）
+#
+# 作用：把四类"资源释放 / Win32 返回值 / DLL 搜索路径"规则从 SDK 默认的"关闭"
+# 提升为 **error**，本轮已把它们清零，此后任何回归都会直接让构建失败，
+# 避免"修好的问题又悄悄长回来"。
+#   CA2000 局部可释放对象未释放（如 StringContent）
+#   CA2213 实现了 Dispose 却漏释放自有字段（CTS / SemaphoreSlim）
+#   CA1806 忽略 Win32 返回值
+#   CA5392 P/Invoke 未限定 DLL 搜索路径（单文件版运行时在用户可写目录 → DLL 劫持面）
+#
+# 为什么用 .editorconfig 而不是 -warnaserror：诊断严重性一旦由 .editorconfig 指定，
+# 命令行与 WarningsAsErrors 就对它无效（实测警告仍是警告），只能在这一处收口。
+#
+# 只对两个发布工程生效：测试工程与已停止维护的 UiTests 里有大量同类历史写法，
+# 一并卡住会让 dotnet test 直接构建失败，反而掩盖真实问题。
+#
+# 要临时放宽（例如排查历史回归）：把对应行改成 none，或临时删除本文件。
+
+[KokonaDownloader.Core/*.cs]
+dotnet_diagnostic.CA2000.severity = error
+dotnet_diagnostic.CA2213.severity = error
+dotnet_diagnostic.CA1806.severity = error
+dotnet_diagnostic.CA5392.severity = error
+
+[KokonaDownloader.Core/**/*.cs]
+dotnet_diagnostic.CA2000.severity = error
+dotnet_diagnostic.CA2213.severity = error
+dotnet_diagnostic.CA1806.severity = error
+dotnet_diagnostic.CA5392.severity = error
+
+[KokonaDownloader.App/*.cs]
+dotnet_diagnostic.CA2000.severity = error
+dotnet_diagnostic.CA2213.severity = error
+dotnet_diagnostic.CA1806.severity = error
+dotnet_diagnostic.CA5392.severity = error
+
+[KokonaDownloader.App/**/*.cs]
+dotnet_diagnostic.CA2000.severity = error
+dotnet_diagnostic.CA2213.severity = error
+dotnet_diagnostic.CA1806.severity = error
+dotnet_diagnostic.CA5392.severity = error

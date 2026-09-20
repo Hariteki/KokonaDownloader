@@ -19,7 +19,7 @@ using Windows.UI;
 
 namespace KokonaDownloader.App;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Window, IDisposable
 {
     private readonly ObservableCollection<TaskItemViewModel> _tasks = new();
     private readonly Dictionary<string, TaskItemViewModel> _taskMap = new();
@@ -63,6 +63,9 @@ public partial class MainWindow : Window
     /// <summary>串行显示 ContentDialog，返回用户选择结果（闸门忙时排队等待，不会抛 0x80000019）。</summary>
     private async Task<ContentDialogResult> ShowDialogAsync(Func<ContentDialog> createDialog)
     {
+        // 窗口已关闭（退出/关窗竞态）：闸门可能已释放，直接按"未打开对话框"处理，
+        // 语义等同用户取消，调用方现有的 None 分支已覆盖这种结果
+        if (_disposed) return ContentDialogResult.None;
         await _dialogGate.WaitAsync();
         try
         {
@@ -70,8 +73,32 @@ public partial class MainWindow : Window
         }
         finally
         {
-            _dialogGate.Release();
+            ReleaseDialogGate();
         }
+    }
+
+    /// <summary>窗口关闭时闸门可能已被 Dispose（关窗与在途对话框竞态），归还动作必须容错。</summary>
+    private void ReleaseDialogGate()
+    {
+        try { _dialogGate.Release(); }
+        catch (ObjectDisposedException) { }
+    }
+
+    private bool _disposed;
+
+    /// <summary>释放本窗口自有的内核/同步资源（第四轮 CA1001/CA2213）：
+    /// 命名事件句柄（内核对象）、线程池等待项、对话框闸门信号量。
+    /// 原先 _showEvent 只在窗口关闭事件里释放、_dialogGate 从未释放；
+    /// 现集中到 Dispose，由 Closed 事件调用（重复调用安全）。</summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        try { _showEventWait?.Unregister(null); } catch { }
+        _showEventWait = null;
+        try { _showEvent?.Dispose(); } catch { }
+        _showEvent = null;
+        try { _dialogGate.Dispose(); } catch { }
     }
 
     /// <summary>WinUI3 唯一可挂到 UIElement.Shadow 的具体类型是 ThemeShadow（合成层 DropShadow 不派生自它），
@@ -170,8 +197,7 @@ public partial class MainWindow : Window
         Closed += async (_, _) =>
         {
             _timer.Stop();
-            _showEventWait?.Unregister(null);
-            _showEvent?.Dispose();
+            Dispose(); // 释放命名事件/线程池等待项/对话框闸门（见 Dispose）
             ThemeService.ThemeChanged -= OnThemeChangedRefreshSelectionVisuals;
             ThemeService.Unregister(this);
             if (App.Host != null)

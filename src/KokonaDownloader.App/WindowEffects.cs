@@ -106,6 +106,17 @@ public static class WindowEffects
         return DefSubclassProc(hwnd, uMsg, wParam, lParam);
     }
 
+    /// <summary>DWM 属性设置失败的"只记一次"开关：Win10 早期版本本就不支持标题栏着色属性，
+    /// 每次主题切换都会失败，逐条记录会刷屏；但完全忽略会让真正的失效（如 HWND 传错）无人发现。</summary>
+    private static int _dwmAttrFailureLogged;
+
+    private static void NoteDwmAttrResult(int hr, string what)
+    {
+        if (hr == 0) return; // S_OK
+        if (Interlocked.Exchange(ref _dwmAttrFailureLogged, 1) == 0)
+            App.Log($"[effects] {what} 设置失败（HRESULT 0x{hr:X8}），后续同类失败不再记录");
+    }
+
     /// <summary>切换标题栏深浅色模式。注意必须传真实 HWND（WindowId.Value 不是 HWND，曾导致静默失效）。</summary>
     public static void SetDarkTitleBar(Window window, bool dark)
     {
@@ -114,7 +125,7 @@ public static class WindowEffects
             var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
             if (hwnd == IntPtr.Zero) return;
             var v = dark ? 1 : 0;
-            DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref v, sizeof(int));
+            NoteDwmAttrResult(DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref v, sizeof(int)), "标题栏深浅色");
         }
         catch { }
     }
@@ -135,7 +146,7 @@ public static class WindowEffects
             if (hwnd == IntPtr.Zero) return;
             // COLORREF 为 0x00BBGGRR（红在低位）
             var colorref = (int)(color.R | (color.G << 8) | (color.B << 16));
-            DwmSetWindowAttribute(hwnd, attribute, ref colorref, sizeof(int));
+            NoteDwmAttrResult(DwmSetWindowAttribute(hwnd, attribute, ref colorref, sizeof(int)), $"DWM 颜色属性 {attribute}");
         }
         catch { }
     }

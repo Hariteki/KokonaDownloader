@@ -180,6 +180,24 @@ public sealed class DownloadEngine : IAsyncDisposable
         return req;
     }
 
+    /// <summary>轮询诊断指纹（L-8；第四轮 N-2 把它从轮询循环里抽出来以便单测）：
+    /// 将"每个任务的 gid + 状态"与"停止任务数"折叠成一个 FNV-32 整数，
+    /// 用于判断这一轮与上一轮是否值得再写一条诊断日志（无字符串分配）。
+    /// 语义要求：内容相同 → 指纹相同；任一 gid 增减、状态变化、或 NumStopped 变化 → 指纹变化。
+    /// 只服务于诊断日志，不参与任何业务判定；FNV-32 理论上可能碰撞，后果仅是少写一条日志。
+    /// （FNV-64 的基准常量超出 long.MaxValue，故取 32 位。）</summary>
+    public static int ComputePollDiagFingerprint(IEnumerable<DownloadTaskInfo> tasks, GlobalStat stats)
+    {
+        var sig = unchecked((int)2166136261u); // FNV-32 offset basis（超出 int.MaxValue，取低 32 位）
+        foreach (var t in tasks)
+        {
+            sig = unchecked(sig * 16777619 + t.Gid.GetHashCode()); // FNV-32 prime
+            sig = unchecked(sig * 16777619 + (int)t.State);
+        }
+        return unchecked(sig * 16777619 + stats.NumStopped);
+    }
+
+    /// <summary>启动 aria2 子进程并拉起轮询循环。重复调用安全（_startLock + _started）。</summary>
     public async Task StartAsync(CancellationToken ct = default)
     {
         lock (_startLock)
@@ -306,16 +324,10 @@ public sealed class DownloadEngine : IAsyncDisposable
                 };
 
                 // 诊断打点：任务集合或统计变化时记录一次（空轮询静默）。
-                // 每轮比较用无分配的整数指纹（gid+状态折叠 + stopped 计数）；
+                // 每轮比较用无分配的整数指纹（见 ComputePollDiagFingerprint）；
                 // 只有真的检测到变化才拼完整签名字符串用于日志——原先每轮都拼，
                 // 1000 任务时每轮产生数十 KB 字符串垃圾（每秒一次）。
-                var sig = unchecked((int)2166136261u); // FNV-32 offset basis（超出 int.MaxValue，取低 32 位）
-                foreach (var t in tasks)
-                {
-                    sig = unchecked(sig * 16777619 + t.Gid.GetHashCode());
-                    sig = unchecked(sig * 16777619 + (int)t.State);
-                }
-                sig = unchecked(sig * 16777619 + stats.NumStopped);
+                var sig = ComputePollDiagFingerprint(tasks, stats);
                 if (sig != _lastPollSig)
                 {
                     _lastPollSig = sig;
@@ -800,6 +812,9 @@ public sealed class DownloadEngine : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         try { await StopAsync().ConfigureAwait(false); } catch { }
+        // StopAsync 已等待轮询任务结束，此时释放其取消令牌是安全的（CA2213：自有可释放字段必须释放）
+        try { _pollCts?.Dispose(); } catch { }
+        _pollCts = null;
         _client.Dispose();
         _process.Dispose();
     }

@@ -119,7 +119,8 @@ async function verifyKey(settings) {
  * 转发下载任务到客户端。
  * 返回 { ok, gid, duplicate, confirm }（duplicate=客户端任务列表已存在同 URL 任务；
  * confirm=单条磁力链接，客户端已弹确认窗口等待用户决定）；失败时抛出带 code 的错误：
- *   offline=无法连接 / unauthorized=密钥错误 / rejected=客户端拒绝 / http=其他错误
+ *   offline=无法连接 / unauthorized=密钥错误 / rejected=客户端拒绝 / busy=客户端并发已满 / http=其他错误
+ * 状态码到 code 的映射本身抽到了 logic.js（mapDownloadResponse），便于在无浏览器环境下断言。
  */
 async function forwardDownload(settings, payload) {
   const url = KokonaLogic.baseUrl(settings) + '/api/download';
@@ -141,17 +142,13 @@ async function forwardDownload(settings, payload) {
   let body = null;
   try { body = await resp.json(); } catch (e) { /* 忽略解析失败 */ }
 
-  if (resp.status === 401) {
-    const err = new Error('连接密钥错误，请点击工具栏图标重新粘贴密钥');
-    err.code = 'unauthorized';
+  const mapped = KokonaLogic.mapDownloadResponse(resp.status, body);
+  if (!mapped.ok) {
+    const err = new Error(mapped.message);
+    err.code = mapped.code;
     throw err;
   }
-  if (!resp.ok) {
-    const err = new Error((body && body.message) || ('客户端返回错误 HTTP ' + resp.status));
-    err.code = resp.status === 400 ? 'rejected' : 'http';
-    throw err;
-  }
-  return { ok: true, gid: body && body.gid, duplicate: !!(body && body.duplicate), confirm: !!(body && body.confirm) };
+  return mapped;
 }
 
 // ---------- 连接状态 ----------

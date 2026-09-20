@@ -275,4 +275,38 @@ public class FileNameResolutionTests : IAsyncLifetime
             $"应存在 dup (1).exe，实际目录内容: {string.Join(", ", Directory.GetFiles(dir))}");
         Assert.Equal("old", File.ReadAllText(Path.Combine(dir, "dup.exe"))); // 旧文件未被覆盖
     }
+
+    [Fact]
+    public async Task 批量添加时同样剔除URL末段伪文件名()
+    {
+        // L-3 回归（第四轮 N-2 补护栏）：单任务路径早已丢弃"只是把链接末段重复一遍"的伪文件名，
+        // 但"一次贴多个链接"的批量路径曾漏掉这一步——out 被固定成链接末段编号，
+        // 真实名（只在 Content-Disposition 里）就永远解析不出来。
+        _fileServer.AddFile("23_900001", new byte[40 * 1024],
+            new Dictionary<string, string> { ["Content-Disposition"] = "attachment; filename=\"batch-real-1.bin\"" });
+        _fileServer.AddFile("23_900002", new byte[40 * 1024],
+            new Dictionary<string, string> { ["Content-Disposition"] = "attachment; filename=\"batch-real-2.bin\"" });
+
+        var requests = new[]
+        {
+            new NewTaskRequest { Urls = new List<string> { _fileServer.Url("23_900001") }, FileName = "23_900001" },
+            new NewTaskRequest { Urls = new List<string> { _fileServer.Url("23_900002") }, FileName = "23_900002" },
+        };
+        var added = await _engine.AddTasksAsync(requests);
+        Assert.Equal(2, added.Count);
+
+        foreach (var t in added)
+        {
+            var task = await WaitTaskAsync(t.Gid);
+            Assert.Equal("completed", task.GetProperty("state").GetString());
+        }
+
+        var dir = _settings.Current.DefaultDownloadDir;
+        Assert.True(File.Exists(Path.Combine(dir, "batch-real-1.bin")),
+            $"批量路径也应落盘响应头真实名，实际目录内容: {string.Join(", ", Directory.GetFiles(dir))}");
+        Assert.True(File.Exists(Path.Combine(dir, "batch-real-2.bin")),
+            $"批量路径也应落盘响应头真实名，实际目录内容: {string.Join(", ", Directory.GetFiles(dir))}");
+        Assert.False(File.Exists(Path.Combine(dir, "23_900001")), "批量路径不应把链接末段固定为 out");
+        Assert.False(File.Exists(Path.Combine(dir, "23_900002")), "批量路径不应把链接末段固定为 out");
+    }
 }

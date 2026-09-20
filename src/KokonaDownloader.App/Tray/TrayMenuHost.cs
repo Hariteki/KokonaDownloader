@@ -72,8 +72,16 @@ public sealed class TrayMenuHost
     {
         var hwnd = WindowNative.GetWindowHandle(_host);
         if (hwnd == nint.Zero) return;
-        SetWindowLong(hwnd, GWL_EXSTYLE, GetWindowLong(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED | WS_EX_TOOLWINDOW);
-        SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA);
+        var before = GetWindowLong(hwnd, GWL_EXSTYLE);
+        var prev = SetWindowLong(hwnd, GWL_EXSTYLE, before | WS_EX_LAYERED | WS_EX_TOOLWINDOW);
+        // SetWindowLong 的返回值是旧样式（0 也可能合法），因此不靠返回值判成败，而是回读校验：
+        // 样式没生效就意味着 1×1 钳制出的深色小块会露出来（历史 bug"菜单下方黑方框"），必须留痕。
+        const int want = WS_EX_LAYERED | WS_EX_TOOLWINDOW;
+        var after = GetWindowLong(hwnd, GWL_EXSTYLE);
+        if ((after & want) != want)
+            App.Log($"[tray] 托盘宿主隐藏样式未生效：before=0x{before:X} SetWindowLong 返回=0x{prev:X} after=0x{after:X}，可能出现黑方框");
+        if (!SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA))
+            App.Log($"[tray] 托盘宿主透明属性设置失败：after=0x{after:X}，可能出现黑方框");
     }
 
     private const int GWL_EXSTYLE = -20;
@@ -95,17 +103,37 @@ public sealed class TrayMenuHost
         var menu = new MenuFlyout();
         menu.Items.Add(NativeItem("显示主界面", "\uE8A7", () => App.ShowMainWindow()));
         menu.Items.Add(new MenuFlyoutSeparator());
-        menu.Items.Add(NativeItem("全部暂停", "\uE769", () => _ = App.Host?.Engine?.PauseAllAsync()));
-        menu.Items.Add(NativeItem("全部继续", "\uE768", () => _ = App.Host?.Engine?.ResumeAllAsync()));
+        menu.Items.Add(NativeItem("全部暂停", "\uE769", () => RunLogged("全部暂停", () => App.Host?.Engine?.PauseAllAsync())));
+        menu.Items.Add(NativeItem("全部继续", "\uE768", () => RunLogged("全部继续", () => App.Host?.Engine?.ResumeAllAsync())));
         menu.Items.Add(new MenuFlyoutSeparator());
         menu.Items.Add(NativeItem("退出海兔下载器", "\uE7E8", () => App.ExitApp()));
         return menu;
     }
 
+    /// <summary>托盘菜单里的异步动作：原先写成 <c>_ = PauseAllAsync()</c> 属"射后不管"，
+    /// 失败时异常既不进 UnhandledException 也不落日志（第四轮 N-8）。改为就地 await 并记日志。</summary>
+    private static async void RunLogged(string what, Func<Task?> start)
+    {
+        try
+        {
+            var pending = start();
+            if (pending != null) await pending;
+        }
+        catch (Exception ex)
+        {
+            App.Log($"[tray] 菜单动作「{what}」失败: {ex.Message}");
+        }
+    }
+
     private static MenuFlyoutItem NativeItem(string text, string glyph, Action action)
     {
         var item = new MenuFlyoutItem { Text = text, Icon = new FontIcon { Glyph = glyph } };
-        item.Click += (_, _) => action();
+        // 同步异常此前依赖全局 UnhandledException 兜底；这里就地记录，日志里能直接看到是哪个菜单项
+        item.Click += (_, _) =>
+        {
+            try { action(); }
+            catch (Exception ex) { App.Log($"[tray] 菜单项「{text}」执行失败: {ex.Message}"); }
+        };
         return item;
     }
 

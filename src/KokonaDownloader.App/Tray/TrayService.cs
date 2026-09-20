@@ -61,7 +61,9 @@ public sealed class TrayService : IDisposable
         {
             var action = _balloonClick;
             _balloonClick = null;
-            try { action?.Invoke(); } catch { }
+            // 第四轮 N-8：原先完全静默吞异常，用户点了气泡"什么都没发生"时无从排查
+            try { action?.Invoke(); }
+            catch (Exception ex) { App.Log($"[tray] 通知气泡点击动作失败: {ex}"); }
         };
         _notifyIcon.BalloonTipClosed += (_, _) => _balloonClick = null;
         UpdateIcon(force: true);

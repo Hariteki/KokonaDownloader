@@ -164,6 +164,41 @@ ok(KokonaLogic.shouldCapture(mkItem({ url: "magnet:?xt=urn:btih:abc" }), S, EXT_
 ok(KokonaLogic.shouldCapture(null, S, EXT_START) === false, "shouldCapture: null item");
 ok(KokonaLogic.shouldCapture(mkItem({}), null, EXT_START) === false, "shouldCapture: null settings");
 
+// ===== mapDownloadResponse (background.js response mapping, extracted for testability) =====
+// Expected Chinese messages are built from code points: this file must stay ASCII because
+// cscript reads sources as ANSI and would mangle literal CJK.
+var EXPECT_UNAUTHORIZED = String.fromCharCode(0x8fde, 0x63a5, 0x5bc6, 0x94a5, 0x9519, 0x8bef, 0xff0c,
+    0x8bf7, 0x70b9, 0x51fb, 0x5de5, 0x5177, 0x680f, 0x56fe, 0x6807, 0x91cd, 0x65b0, 0x7c98, 0x8d34, 0x5bc6, 0x94a5);
+var EXPECT_BUSY = String.fromCharCode(0x5ba2, 0x6237, 0x7aef, 0x6b63, 0x5fd9, 0xff08, 0x5e76, 0x53d1,
+    0x8bf7, 0x6c42, 0x5df2, 0x6ee1, 0xff09, 0xff0c, 0x8bf7, 0x7a0d, 0x540e, 0x91cd, 0x8bd5);
+var EXPECT_HTTP_PREFIX = String.fromCharCode(0x5ba2, 0x6237, 0x7aef, 0x8fd4, 0x56de, 0x9519, 0x8bef) + " HTTP ";
+var M = KokonaLogic.mapDownloadResponse;
+
+ok(M(200, { gid: "abc" }).ok === true, "map: 200 is a success");
+ok(M(200, { gid: "abc" }).gid === "abc", "map: gid passed through");
+ok(M(200, { gid: "abc" }).duplicate === false, "map: duplicate defaults to false");
+ok(M(200, { gid: "abc", duplicate: true }).duplicate === true, "map: duplicate flag surfaced");
+ok(M(200, { gid: "abc", confirm: true }).confirm === true, "map: magnet confirm flag surfaced");
+ok(M(200, null).ok === true && M(200, null).gid === null, "map: missing body tolerated");
+ok(M(204, null).ok === true, "map: 204 counts as success");
+ok(M(299, null).ok === true, "map: any 2xx counts as success");
+ok(M(401, null).ok === false, "map: 401 is a failure");
+ok(M(401, null).code === "unauthorized", "map: 401 -> unauthorized");
+ok(M(401, { message: "ignored" }).message === EXPECT_UNAUTHORIZED,
+    "map: 401 keeps the built-in key hint instead of server wording");
+ok(M(400, null).code === "rejected", "map: 400 -> rejected");
+ok(M(400, { message: "bad url" }).message === "bad url", "map: 400 surfaces the server reason");
+ok(M(503, null).code === "busy", "map: client gate 503 -> busy, not a generic http error");
+ok(M(503, null).message === EXPECT_BUSY, "map: 503 falls back to the built-in busy hint");
+ok(M(503, { message: "srv busy" }).message === "srv busy", "map: 503 prefers the server reason");
+ok(M(503, { message: "" }).message === EXPECT_BUSY, "map: empty server message falls back to the hint");
+ok(M(500, null).code === "http", "map: 500 -> http");
+ok(M(404, null).code === "http", "map: 404 -> http");
+ok(M(500, null).message === EXPECT_HTTP_PREFIX + "500", "map: generic failure mentions the status code");
+ok(M(503, null).ok === false && typeof M(503, null).code === "string",
+    "map: failures always carry a string code for err.code");
+
 WScript.Echo("-----");
+
 WScript.Echo("passed " + pass + " / " + (pass + fail));
 WScript.Quit(fail === 0 ? 0 : 1);

@@ -39,7 +39,7 @@ public sealed class Aria2RpcClient : IDisposable
             ["method"] = method,
             ["params"] = BuildParams(args ?? Array.Empty<object?>())
         };
-        var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+        using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
         var resp = await _http.PostAsync(_endpoint, content, ct).ConfigureAwait(false);
         var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
@@ -50,7 +50,7 @@ public sealed class Aria2RpcClient : IDisposable
     /// <summary>发送自定义完整报文（用于 multicall 等特殊结构）。</summary>
     private async Task<JsonNode?> PostRawAsync(JsonObject payload, CancellationToken ct)
     {
-        var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+        using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
         var resp = await _http.PostAsync(_endpoint, content, ct).ConfigureAwait(false);
         var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)

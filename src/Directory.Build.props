@@ -1,0 +1,30 @@
+<Project>
+
+  <!-- ============================================================
+       版本号唯一来源（第四轮审计 P1-5）：以前 1.0.8 同时写死在
+       App.csproj 与 ApiService.Version 两处，改版本要改两个地方，
+       漏一个就会出现"exe 是 1.0.8、/api/ping 报 1.0.7"的错配。
+       现在版本只写在本文件（src\ 下所有工程继承），
+       ApiService.Version 运行时从程序集特性读取。
+       发版流程：改这里一处即可（exe 文件版本、ping、关于页同源）。
+       ============================================================ -->
+  <PropertyGroup>
+    <!-- 合法 semver，用于 NuGet 语义的 Version 与 InformationalVersion -->
+    <Version>1.0.8</Version>
+    <!-- 程序集/文件版本必须为纯数字（Windows 要求 x.y.z.w），故固定 1.0.8.0 -->
+    <AssemblyVersion>1.0.8.0</AssemblyVersion>
+    <FileVersion>1.0.8.0</FileVersion>
+    <InformationalVersion>1.0.8</InformationalVersion>
+    <!-- .NET 8 SDK 默认会在 InformationalVersion 末尾追加 "+git哈希"；
+         关闭以保证 ping/关于页与文件属性显示完全一致（读取端也做了截断兜底） -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <!-- ============================================================
+       分析器门槛（第四轮审计 P2-10）不在这里，而在同目录的 .editorconfig：
+       CA2000 / CA2213 / CA1806 / CA5392 已按目录提升为 error，仅对 Core / App
+       两个发布工程生效。诊断严重性一旦由 .editorconfig 指定，
+       -warnaserror / WarningsAsErrors 就无效（实测过），所以只在那一处收口。
+       ============================================================ -->
+
+</Project>

@@ -103,7 +103,9 @@ public sealed class ApiService : IDisposable
     private Task? _loop;
     /// <summary>请求处理并发闸门：原先每请求一个 Task.Run 无上限，病态客户端可无限堆积处理器任务。
     /// 回环+鉴权下风险低，但仍设上限；达到上限时直接 503 拒绝（排队会让每个等待请求继续占着 socket）。</summary>
-    private readonly SemaphoreSlim _requestGate = new(64, 64);
+    private readonly SemaphoreSlim _requestGate;
+    /// <summary>生产默认并发上限（实测 120 并发突发下 75 个 200 + 45 个 503，无排队挂起）。</summary>
+    public const int DefaultMaxConcurrentRequests = 64;
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -112,7 +114,33 @@ public sealed class ApiService : IDisposable
 
     public int Port { get; }
     public bool IsListening => _listener.IsListening;
-    public string Version { get; } = "1.0.8";
+
+    /// <summary>对外报告的版本：唯一来源是程序集版本（src\Directory.Build.props），不再手写字符串。</summary>
+    public string Version { get; } = ReadAssemblyVersion();
+
+    private static string ReadAssemblyVersion()
+    {
+        try
+        {
+            var asm = typeof(ApiService).Assembly;
+            var attrs = asm.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false);
+            if (attrs.Length > 0 &&
+                attrs[0] is System.Reflection.AssemblyInformationalVersionAttribute info &&
+                !string.IsNullOrWhiteSpace(info.InformationalVersion))
+            {
+                // SDK 默认会在 InformationalVersion 末尾追加 "+commit 哈希"（源链接），这里截断
+                var v = info.InformationalVersion.Trim();
+                var plus = v.IndexOf('+');
+                return plus > 0 ? v[..plus] : v;
+            }
+            var ver = asm.GetName().Version;
+            return ver is null ? "0.0.0" : $"{ver.Major}.{ver.Minor}.{Math.Max(ver.Build, 0)}";
+        }
+        catch
+        {
+            return "0.0.0";
+        }
+    }
 
     /// <summary>收到单条磁力链接（浏览器扩展/系统协议转发）：UI 层订阅后弹独立确认窗口，由用户决定是否下载。</summary>
     public event Action<string>? MagnetConfirmRequested;
@@ -120,12 +148,18 @@ public sealed class ApiService : IDisposable
     /// <summary>扩展送来的链接命中下载中/排队/暂停的重复任务（已自动跳过）：UI 层订阅后弹窗提醒用户。</summary>
     public event Action<string>? DuplicateTaskNoticeRequested;
 
-    public ApiService(DownloadEngine engine, SettingsStore settings, int port, Action<string>? log = null)
+    /// <param name="maxConcurrentRequests">并发闸门容量，默认 <see cref="DefaultMaxConcurrentRequests"/>。
+    /// 之所以可注入：这道门的"饱和即 503"行为必须在单测里确定性地复现（用 64 槽需要同时挂 65 个连接，
+    /// 且无法稳定命中时序），生产调用方一律使用默认值。</param>
+    public ApiService(DownloadEngine engine, SettingsStore settings, int port, Action<string>? log = null,
+                      int maxConcurrentRequests = DefaultMaxConcurrentRequests)
     {
         _engine = engine;
         _settings = settings;
         _log = log ?? (_ => { });
         Port = port;
+        if (maxConcurrentRequests <= 0) throw new ArgumentOutOfRangeException(nameof(maxConcurrentRequests));
+        _requestGate = new SemaphoreSlim(maxConcurrentRequests, maxConcurrentRequests);
     }
 
     public void Start()
@@ -143,8 +177,28 @@ public sealed class ApiService : IDisposable
         while (!ct.IsCancellationRequested && _listener.IsListening)
         {
             HttpListenerContext ctx;
-            try { ctx = await _listener.GetContextAsync().ConfigureAwait(false); }
-            catch { break; }
+            try
+            {
+                ctx = await _listener.GetContextAsync().ConfigureAwait(false);
+            }
+            catch (HttpListenerException ex)
+            {
+                // Stop()/Close() 会让挂起的 GetContextAsync 抛出该异常，属正常关停；
+                // 若监听器仍在监听却抛出，则是真实故障，必须留下日志再退出（否则表现为"端口占用但无响应"）。
+                if (!ct.IsCancellationRequested && _listener.IsListening)
+                    _log($"API 接受循环异常退出（监听器仍在使用中，API 将停止接收新请求）: {ex.Message}");
+                break;
+            }
+            catch (ObjectDisposedException)
+            {
+                break; // 监听器已释放：正常关停路径
+            }
+            catch (Exception ex)
+            {
+                if (!ct.IsCancellationRequested)
+                    _log($"API 接受循环未预期异常退出（监听器仍在使用中，API 将停止接收新请求）: {ex}");
+                break;
+            }
             if (!_requestGate.Wait(0)) // 非阻塞尝试获取（本机 SDK 的 SemaphoreSlim 无 TryWait 重载，Wait(0) 语义相同）
             {
                 // 并发上限已满：立即拒绝，避免无界排队（每个排队的请求还会一直占着 socket）
@@ -156,12 +210,36 @@ public sealed class ApiService : IDisposable
                 catch { }
                 continue;
             }
-            _ = Task.Run(async () =>
+            try
             {
-                try { await HandleSafe(ctx).ConfigureAwait(false); }
-                finally { _requestGate.Release(); }
-            }, ct);
+                // 不向 Task.Run 传取消令牌：令牌已取消时 Task.Run 会直接返回已取消的任务而不执行委托，
+                // 那样 finally 里的 Release 永远跑不到，闸门槽位会被永久吃掉。
+                _ = Task.Run(async () =>
+                {
+                    try { await HandleSafe(ctx).ConfigureAwait(false); }
+                    finally { ReleaseGate(); }
+                });
+            }
+            catch (Exception ex)
+            {
+                // 任务未能启动（线程池耗尽/进程正在关闭）：立即归还槽位，否则 64 个槽会被逐个吃光
+                _log($"API 请求处理器启动失败: {ex.Message}");
+                ReleaseGate();
+                try
+                {
+                    ctx.Response.StatusCode = 503;
+                    ctx.Response.Close();
+                }
+                catch { }
+            }
         }
+    }
+
+    private void ReleaseGate()
+    {
+        // Dispose 后可能仍有在途处理器归还槽位：ObjectDisposedException 属关停竞态，就地吞掉
+        try { _requestGate.Release(); }
+        catch (ObjectDisposedException) { }
     }
 
     private async Task HandleSafe(HttpListenerContext ctx)
@@ -543,5 +621,10 @@ public sealed class ApiService : IDisposable
     {
         Stop();
         try { _listener.Close(); } catch { }
+        // 自有可释放资源必须释放（CA2213）：令牌源读操作在 Dispose 后仍安全，接受循环只读 IsCancellationRequested
+        var cts = _cts;
+        _cts = null;
+        try { cts?.Dispose(); } catch { }
+        _requestGate.Dispose();
     }
 }

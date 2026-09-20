@@ -13,10 +13,11 @@ namespace KokonaDownloader.App;
 /// 2) 否则确保 %LOCALAPPDATA%\KokonaDownloader\Standalone 里有完整运行时文件，
 ///    并把 exe 复制过去、从那里带原参数重新拉起本程序。
 ///
-/// 完整性与并发（v1.0.8 第二轮审计修复）：
-/// - 运行时目录带一份清单（嵌入载荷内容哈希 + 文件列表 + exe 哈希/大小/mtime）。
-///   清单与当前嵌入载荷一致且文件齐全 → 跳过解压；exe 未变化 → 跳过 304.9 MB 拷贝。
-///   （原先每次冷启动无条件重解压 ~7 MB 并覆盖整个 exe。）
+/// 完整性与并发（v1.0.8 第二/四轮审计修复）：
+/// - 运行时目录带一份清单（嵌入载荷内容哈希 + 逐文件"大小+SHA256" + exe 哈希/大小/mtime）。
+///   清单与当前嵌入载荷一致且文件"大小与内容都匹配" → 跳过解压；exe 未变化 → 跳过 304.9 MB 拷贝。
+///   （原先每次冷启动无条件重解压 ~7 MB 并覆盖整个 exe；再早一版只比文件大小，
+///    同尺寸但内容损坏的文件无法自愈 —— 第四轮 N-4 补上逐文件哈希。）
 /// - 引导用命名互斥锁串行化：并发冷启动时，后到者等锁后复查完整性直接复用，
 ///   不再出现两个实例同时 ExtractAll 撞文件锁、静默中止引导导致文件不全的问题。
 /// </summary>
@@ -33,9 +34,13 @@ internal static class StandaloneBootstrap
         {
             EnsureRuntimeFiles();
         }
-        catch
+        catch (Exception ex)
         {
-            // 尽力而为：解压彻底失败时让 XAML 初始化按原有方式报错，不在此处吞掉。
+            // 这里确实会吞掉引导异常（第四轮 N-5：原注释写"不在此处吞掉"与实际相反）。
+            // 之所以吞：ModuleInitializer 阶段任何异常都会让 CLR 直接放弃类型初始化并炸在启动路径上，
+            // 表现为一闪而退且无痕迹。改为记一条日志（App.Log 全静态、自带 try/catch，此阶段可安全调用），
+            // 之后仍会因缺 resources.pri 在 XAML 初始化处抛 XamlParseException —— 日志即定位线索。
+            App.Log($"[bootstrap] 单文件引导失败（将退化为 XAML 初始化报错）: {ex}");
         }
     }
 
@@ -100,9 +105,10 @@ internal static class StandaloneBootstrap
 
     /// <summary>
     /// 持引导锁时确保运行时目录完整：
-    /// 1) 清单与当前嵌入载荷一致（内容哈希 + 文件齐全且大小匹配）→ 跳过解压，否则全量重解；
+    /// 1) 清单与当前嵌入载荷一致（内容哈希 + 逐个文件"大小与 SHA256 都匹配"）→ 跳过解压，否则全量重解；
     /// 2) exe 仅在"目标缺失 / 大小或 mtime 变化且内容哈希确实不同"时拷贝，
     ///    拷贝成功才更新清单记录（失败则保留旧记录，下次启动自愈重试）。
+    /// 校验代价：约 7 MB 载荷逐文件哈希，SHA256 在本级 SSD 上约 10 ms，远低于一次解压。
     /// </summary>
     private static void EnsureRuntimeComplete(System.Reflection.Assembly asm, List<string> names, string runtimeDir, string exePath)
     {
@@ -112,24 +118,31 @@ internal static class StandaloneBootstrap
         var payloadHash = HashPayload(asm, names);
         var manifest = ReadManifest(root);
 
-        var upToDate = manifest != null
+        // 逐文件校验（第四轮 N-4）：只比大小会放过"同尺寸内容损坏"的 XBF/PRI（一旦损坏就是启动即崩且永不自愈），
+        // 因此校验通过的标准是"大小与内容都对"。校验失败即重解压，实现自愈。
+        var verified = manifest != null
             && string.Equals(manifest.PayloadHash, payloadHash, StringComparison.OrdinalIgnoreCase)
-            && manifest.Files.Count == names.Count
-            && manifest.Files.All(f => File.Exists(root + f.Rel) && new FileInfo(root + f.Rel).Length == f.Size);
+            ? VerifyFiles(root, names, manifest)
+            : null;
 
-        if (!upToDate)
+        List<ManifestFile> fileRecords;
+        if (verified == null)
         {
             ExtractAll(asm, names, runtimeDir);
-            manifest = new Manifest
-            {
-                PayloadHash = payloadHash,
-                Files = names.Select(n =>
-                {
-                    var rel = n[ResourcePrefix.Length..].Replace('\\', '/');
-                    return new ManifestFile { Rel = rel, Size = new FileInfo(root + rel).Length };
-                }).ToList(),
-            };
+            fileRecords = names
+                .Select(n => n[ResourcePrefix.Length..].Replace('\\', '/'))
+                .Select(rel => new ManifestFile { Rel = rel, Size = new FileInfo(root + rel).Length, Hash = HashFileSafe(root + rel) })
+                .ToList();
         }
+        else
+        {
+            fileRecords = verified; // 校验过程中已顺带刷新（旧清单缺哈希时在此补齐）
+        }
+
+        // 复用旧清单的 exe 记录（ExeSize/ExeMtimeUtc/ExeHash），只更新载荷部分
+        manifest ??= new Manifest();
+        manifest.PayloadHash = payloadHash;
+        manifest.Files = fileRecords;
 
         // exe 拷贝判定：大小+mtime 与记录一致 → 同一文件，跳过（不哈希 304.9 MB）；
         // 不一致 → 哈希比对，内容确实变了才覆盖拷贝。
@@ -205,6 +218,39 @@ internal static class StandaloneBootstrap
         return Convert.ToHexString(SHA256.HashData(fs)).ToLowerInvariant();
     }
 
+    /// <summary>重解压后取实测哈希；极端情况（文件被占用/杀软暂锁）读不到就记空串，
+    /// 下次启动会走"清单缺哈希"路径重新校验，不会误判为永久有效。</summary>
+    private static string HashFileSafe(string path)
+    {
+        try { return HashFile(path); }
+        catch { return string.Empty; }
+    }
+
+    /// <summary>逐个载荷文件校验"大小 + 内容"（第四轮 N-4）。
+    /// 通过则返回可直接写回清单的记录（顺带补齐旧清单缺失的哈希）；
+    /// 任一文件缺失、大小不符、或内容与清单不符，即返回 null 表示需要重解压自愈。
+    /// 旧清单（无 Hash 字段）本轮只校验大小，并把实测哈希写回，下次起即可校验内容。</summary>
+    private static List<ManifestFile>? VerifyFiles(string root, List<string> names, Manifest manifest)
+    {
+        if (manifest.Files.Count != names.Count) return null;
+        var byRel = new Dictionary<string, ManifestFile>(StringComparer.OrdinalIgnoreCase);
+        foreach (var f in manifest.Files)
+            byRel[f.Rel] = f;
+        var records = new List<ManifestFile>(names.Count);
+        foreach (var name in names)
+        {
+            var rel = name[ResourcePrefix.Length..].Replace('\\', '/');
+            var path = root + rel;
+            if (!byRel.TryGetValue(rel, out var rec) || !File.Exists(path)) return null;
+            if (new FileInfo(path).Length != rec.Size) return null;
+            var actual = HashFile(path);
+            if (!string.IsNullOrEmpty(rec.Hash) && !string.Equals(actual, rec.Hash, StringComparison.OrdinalIgnoreCase))
+                return null; // 同尺寸但内容已损坏：判为过期，重解压自愈
+            records.Add(new ManifestFile { Rel = rel, Size = rec.Size, Hash = actual });
+        }
+        return records;
+    }
+
     private static void ExtractAll(System.Reflection.Assembly asm, List<string> names, string destDir)
     {
         var root = Path.GetFullPath(destDir).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
@@ -237,6 +283,8 @@ internal static class StandaloneBootstrap
     {
         public string Rel { get; set; } = "";
         public long Size { get; set; }
+        /// <summary>文件内容 SHA256（小写十六进制）。空串表示来自旧版清单，本轮校验后补齐。</summary>
+        public string Hash { get; set; } = "";
     }
 
     private static Manifest? ReadManifest(string root)

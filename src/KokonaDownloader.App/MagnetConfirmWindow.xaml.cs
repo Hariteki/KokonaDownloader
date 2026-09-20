@@ -142,20 +142,30 @@ public sealed partial class MagnetConfirmWindow : Window
         if (_initialFocusSet || args.WindowActivationState == WindowActivationState.Deactivated) return;
         _initialFocusSet = true;
         Activated -= OnActivatedForInitialFocus;
-        // 前台切换（ForceForeground）过程中 Focus 可能失败，重试直至窗口关闭
-        for (var attempt = 1; !_closed; attempt++)
+        // 前台切换（ForceForeground）过程中 Focus 可能失败，重试直至窗口关闭。
+        // async void：任何异常都必须就地吞掉并记日志，否则会击穿到 UI 线程。
+        try
         {
-            await Task.Delay(100);
-            if (StartBtn.Focus(FocusState.Programmatic))
+            for (var attempt = 1; !_closed; attempt++)
             {
-                App.Log($"[magnet] 确认窗口初始焦点设置成功（第 {attempt} 次尝试）");
-                return;
+                await Task.Delay(100);
+                // await 之后窗口可能已经关闭：对已关闭窗口的控件再取 Focus 会抛异常
+                if (_closed) return;
+                if (StartBtn.Focus(FocusState.Programmatic))
+                {
+                    App.Log($"[magnet] 确认窗口初始焦点设置成功（第 {attempt} 次尝试）");
+                    return;
+                }
+                if (attempt >= 30)
+                {
+                    App.Log("[magnet] 确认窗口初始焦点设置失败：重试已达上限");
+                    return;
+                }
             }
-            if (attempt >= 30)
-            {
-                App.Log("[magnet] 确认窗口初始焦点设置失败：重试已达上限");
-                return;
-            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"[magnet] 确认窗口初始焦点设置异常: {ex.Message}");
         }
     }
 
