@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace KokonaDownloader.Core.Engine;
 
@@ -19,6 +20,25 @@ public sealed class TaskMeta
     public bool IsBt { get; set; }
     /// <summary>BT 任务来源磁力链接（删除墓碑匹配、重新下载用）。</summary>
     public string? SourceMagnet { get; set; }
+
+    // ---- 终态快照（第八轮审计 P2-4：本地历史）----
+    // aria2 的 --save-session 实测**不会**写入已完成任务（探针：4 个 complete 任务，会话文件 0 字节），
+    // 所以重启后"已完成"这一整段列表必然消失。客户端自己把终态关键字段留档，重启后由
+    // DownloadEngine 合成历史行，界面与 /api/tasks 才能继续一致地看到它们。
+    /// <summary>任务总长度（字节）。0 表示旧版本元数据没记录，历史行按未知处理。</summary>
+    public long TotalLength { get; set; }
+    /// <summary>已完成长度（字节）。</summary>
+    public long CompletedLength { get; set; }
+    /// <summary>落盘完整路径（打开文件/打开文件夹/删除文件都要用它）。</summary>
+    public string? FilePath { get; set; }
+    /// <summary>任务实际所在目录。</summary>
+    public string? Dir { get; set; }
+    /// <summary>失败时的 aria2 错误码与文案（历史行要能解释"为什么失败"）。</summary>
+    public int ErrorCode { get; set; }
+    public string? ErrorMessage { get; set; }
+    /// <summary>是否为"由本地历史合成"的行（不落 JSON，仅运行期标记；见 DownloadEngine.HistoryRow）。</summary>
+    [JsonIgnore]
+    public bool FromHistory { get; set; }
 }
 
 /// <summary>
@@ -69,7 +89,34 @@ public sealed class TaskStore
         m.FinishedAt = DateTime.Now;
         m.FinalState = task.State.ToString();
         if (!string.IsNullOrEmpty(task.Name)) m.Name = task.Name;
+        // 终态快照：aria2 重启后不会把已完成任务带回来，这些字段就是本地历史的唯一来源
+        m.TotalLength = task.TotalLength;
+        m.CompletedLength = task.TotalLength > 0 ? task.TotalLength : task.CompletedLength;
+        if (!string.IsNullOrEmpty(task.FilePath)) m.FilePath = task.FilePath;
+        if (!string.IsNullOrEmpty(task.Dir)) m.Dir = task.Dir;
+        m.ErrorCode = task.ErrorCode;
+        m.ErrorMessage = task.ErrorMessage;
+        if (task.IsBt) m.IsBt = true;
+        // Urls 保持添加时写入的原值（磁力任务的 aria2 上报会混进 tracker announce 地址，
+        // 覆盖掉会让"重新下载"拿到错误的 URI），只在缺失时兜底补一次
+        if (m.Urls.Count == 0) m.Urls = task.Urls.ToList();
         ScheduleSave();
+    }
+
+    /// <summary>已留下终态快照的元数据（本地历史的数据源），按完成时间倒序。</summary>
+    public List<TaskMeta> Finished() => _metas.Values
+        .Where(m => m.FinishedAt != null && !string.IsNullOrEmpty(m.FinalState))
+        .OrderByDescending(m => m.FinishedAt)
+        .ToList();
+
+    /// <summary>删除指定 gid 集合的元数据，返回删除条数（历史修剪 / 失效元数据回收用）。</summary>
+    public int RemoveMany(IEnumerable<string> gids)
+    {
+        var n = 0;
+        foreach (var g in gids)
+            if (_metas.TryRemove(g, out _)) n++;
+        if (n > 0) ScheduleSave();
+        return n;
     }
 
     public void RemoveMeta(string gid)

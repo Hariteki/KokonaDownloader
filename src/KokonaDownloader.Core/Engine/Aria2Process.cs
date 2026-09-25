@@ -24,7 +24,11 @@ public sealed class Aria2Process : IDisposable
         _log = log;
     }
 
-    public void Start()
+    /// <summary>
+    /// 启动 aria2 子进程。<paramref name="finishedSessionEntries"/> 是"客户端确认早已下载完成"的
+    /// URL+目录，启动前一并从会话文件里过滤掉（见 TombstoneStore.PurgeSessionFile 的重载）。
+    /// </summary>
+    public void Start(ICollection<(string Url, string? Dir)>? finishedSessionEntries = null)
     {
         if (IsRunning) return;
         Directory.CreateDirectory(_config.WorkDir);
@@ -32,74 +36,13 @@ public sealed class Aria2Process : IDisposable
         var sessionFile = Path.Combine(_config.WorkDir, "aria2.session");
         var logFile = Path.Combine(_config.WorkDir, "aria2.log");
         if (!File.Exists(sessionFile)) File.WriteAllText(sessionFile, string.Empty);
-        // 会话文件在异常退出时可能仍残留已删除任务，启动前用墓碑过滤，阻断重启后复活
-        var purged = _tombstones?.PurgeSessionFile(sessionFile) ?? 0;
-        if (purged > 0) _log?.Invoke($"已从会话文件过滤 {purged} 条已删除任务");
+        // 会话文件在异常退出时可能仍残留已删除任务，启动前用墓碑过滤，阻断重启后复活；
+        // 顺带把"其实早就下完"的条目也滤掉——aria2 的 --input-file 不认这是完成过的下载，
+        // 会把它当新任务重新加入（新 gid、0 B、排队中），用户看到的就是"已完成的下载又排了一遍队"。
+        var purged = _tombstones?.PurgeSessionFile(sessionFile, finishedSessionEntries) ?? 0;
+        if (purged > 0) _log?.Invoke($"已从会话文件过滤 {purged} 条（已删除或早已下载完成）");
 
-        var args = new[]
-        {
-            "--enable-rpc",
-            $"--rpc-secret={_config.RpcSecret}",
-            "--rpc-listen-all=false",
-            $"--rpc-listen-port={_config.RpcPort}",
-            $"--dir={_config.DefaultDownloadDir}",
-            $"--input-file={sessionFile}",
-            $"--save-session={sessionFile}",
-            "--save-session-interval=10",
-            $"--max-concurrent-downloads={_config.MaxConcurrentDownloads}",
-            $"--split={_config.DefaultConnections}",
-            "--min-split-size=1M",
-            "--max-connection-per-server=16",
-            "--continue=true",
-            "--auto-save-interval=10",
-            "--allow-overwrite=true",
-            "--enable-mmap=true",
-            $"--log={logFile}",
-            "--log-level=warn",
-            "--summary-interval=0",
-            "--console-log-level=warn",
-            "--quiet=false",
-            // 关掉控制台读数刷新：它会每秒往 stdout 打一行（内容基本是空白/进度条残影），
-            // 被重定向进 app.log 后占全部行数的 96%（实测 44 MB / 64 万行），纯属噪声。
-            "--show-console-readout=false"
-        };
-        if (_config.GlobalSpeedLimit > 0)
-            args = args.Append($"--max-overall-download-limit={_config.GlobalSpeedLimit}").ToArray();
-
-        // BT/磁力支持：DHT + PEX + LPD，follow-torrent=mem 避免往用户目录写 .torrent；
-        // bt-detach-seed-only 让做种任务不占用 max-concurrent-downloads 配额（Motrix 同款方案）
-        if (_config.BtEnabled)
-        {
-            var btArgs = new List<string>
-            {
-                "--enable-dht=true",
-                "--enable-peer-exchange=true",
-                "--bt-enable-lpd=true",
-                $"--listen-port={_config.BtListenPort}",
-                $"--dht-listen-port={_config.BtListenPort}",
-                $"--dht-file-path={Path.Combine(_config.WorkDir, "dht.dat")}",
-                "--dht-entry-point=router.bittorrent.com:6881",
-                "--follow-torrent=mem",
-                "--bt-detach-seed-only=true",
-                $"--bt-max-peers={_config.BtMaxPeers}",
-                // 伪装 Transmission UA/peer-id，避免部分 tracker 封锁 aria2（Motrix 同款做法）
-                "--user-agent=Transmission/2.92",
-                "--peer-id-prefix=-TR2920-"
-            };
-            // 做种策略：关闭做种用 seed-time=0 立即完成；否则按分享率/时长先到为准
-            if (!_config.BtSeedEnabled)
-                btArgs.Add("--seed-time=0");
-            else
-            {
-                if (_config.SeedRatio > 0)
-                    btArgs.Add($"--seed-ratio={_config.SeedRatio.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
-                if (_config.SeedTimeMinutes > 0)
-                    btArgs.Add($"--seed-time={_config.SeedTimeMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
-            }
-            if (!string.IsNullOrWhiteSpace(_config.BtTrackers))
-                btArgs.Add($"--bt-tracker={_config.BtTrackers}");
-            args = args.Concat(btArgs).ToArray();
-        }
+        var args = BuildArgs(_config, sessionFile, logFile);
 
         var psi = new ProcessStartInfo
         {
@@ -124,6 +67,89 @@ public sealed class Aria2Process : IDisposable
     }
 
     private string PidFile => Path.Combine(_config.WorkDir, "aria2.pid");
+
+    /// <summary>
+    /// 组装 aria2c 命令行（公开只为单测：第九轮之后"某个行为是否真的下发给了 aria2"必须能在测试里断言，
+    /// 不能只靠肉眼看日志）。
+    /// </summary>
+    public static string[] BuildArgs(EngineConfig config, string sessionFile, string logFile)
+    {
+        var args = new List<string>
+        {
+            "--enable-rpc",
+            $"--rpc-secret={config.RpcSecret}",
+            "--rpc-listen-all=false",
+            $"--rpc-listen-port={config.RpcPort}",
+            $"--dir={config.DefaultDownloadDir}",
+            $"--input-file={sessionFile}",
+            $"--save-session={sessionFile}",
+            "--save-session-interval=10",
+            $"--max-concurrent-downloads={config.MaxConcurrentDownloads}",
+            $"--split={config.DefaultConnections}",
+            "--min-split-size=1M",
+            "--max-connection-per-server=16",
+            "--continue=true",
+            // 第八轮 P3-6 的取证结论（.verify/fixtest/retry_probe.mjs，两组对照实测）：
+            // 默认参数下 aria2 对 503 这类"临时 5xx"一次都不重试（服务器只收到 1 次请求就报 errorCode=29），
+            // 加上 --retry-wait=2 后同一场景第 3 次请求即下载成功——所以这不是"重试太少"而是"根本不重试"。
+            // 404 两种参数下都只请求 1 次（errorCode=3 Resource not found）：aria2 视其为永久错误，属合理行为。
+            "--retry-wait=2",
+            "--max-tries=5",
+            "--auto-save-interval=10",
+            "--allow-overwrite=true",
+            "--enable-mmap=true",
+            // 第十轮（测试报告 §16）：服务器把中文直接写进 filename="中文.pdf"（裸 UTF-8 字节，没按 RFC 编码）时，
+            // aria2 默认按 Latin-1 解释这些字节，落盘名变成乱码 ä¸­æ.pdf；实测同一份 aria2c 加上这个开关后
+            // 名字正确（.verify/nameprobe）。
+            "--content-disposition-default-utf8=true",
+            $"--log={logFile}",
+            "--log-level=warn",
+            "--summary-interval=0",
+            "--console-log-level=warn",
+            "--quiet=false",
+            // 关掉控制台读数刷新：它会每秒往 stdout 打一行（内容基本是空白/进度条残影），
+            // 被重定向进 app.log 后占全部行数的 96%（实测 44 MB / 64 万行），纯属噪声。
+            "--show-console-readout=false"
+        };
+        if (config.GlobalSpeedLimit > 0)
+            args.Add($"--max-overall-download-limit={config.GlobalSpeedLimit}");
+
+        // BT/磁力支持：DHT + PEX + LPD，follow-torrent=mem 避免往用户目录写 .torrent；
+        // bt-detach-seed-only 让做种任务不占用 max-concurrent-downloads 配额（Motrix 同款方案）
+        if (config.BtEnabled)
+        {
+            var btArgs = new List<string>
+            {
+                "--enable-dht=true",
+                "--enable-peer-exchange=true",
+                "--bt-enable-lpd=true",
+                $"--listen-port={config.BtListenPort}",
+                $"--dht-listen-port={config.BtListenPort}",
+                $"--dht-file-path={Path.Combine(config.WorkDir, "dht.dat")}",
+                "--dht-entry-point=router.bittorrent.com:6881",
+                "--follow-torrent=mem",
+                "--bt-detach-seed-only=true",
+                $"--bt-max-peers={config.BtMaxPeers}",
+                // 伪装 Transmission UA/peer-id，避免部分 tracker 封锁 aria2（Motrix 同款做法）
+                "--user-agent=Transmission/2.92",
+                "--peer-id-prefix=-TR2920-"
+            };
+            // 做种策略：关闭做种用 seed-time=0 立即完成；否则按分享率/时长先到为准
+            if (!config.BtSeedEnabled)
+                btArgs.Add("--seed-time=0");
+            else
+            {
+                if (config.SeedRatio > 0)
+                    btArgs.Add($"--seed-ratio={config.SeedRatio.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+                if (config.SeedTimeMinutes > 0)
+                    btArgs.Add($"--seed-time={config.SeedTimeMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            }
+            if (!string.IsNullOrWhiteSpace(config.BtTrackers))
+                btArgs.Add($"--bt-tracker={config.BtTrackers}");
+            args.AddRange(btArgs);
+        }
+        return args.ToArray();
+    }
 
     /// <summary>
     /// 清理上次异常退出遗留的孤儿 aria2c 进程：

@@ -87,6 +87,30 @@ public sealed class NewTaskRequest
     public List<string>? Headers { get; init; }
     /// <summary>附加 aria2 选项（BT 做种参数等，键值对透传给 RPC）。</summary>
     public Dictionary<string, string>? ExtraOptions { get; init; }
+    /// <summary>
+    /// 目标文件已存在时是否允许直接覆盖。默认 **false**（第八轮审计 P1-2）：
+    /// HTTP/FTP 新建下载一律带上 aria2 的 allow-overwrite=false，让 aria2 自己改名
+    /// （file.bin → file.1.bin），绝不在"重复下载同一链接"时静默覆盖用户已有的文件。
+    /// BT/磁力必须传 true：BT 需要复用目录里的同名文件做分片校验，改了会下不动。
+    /// </summary>
+    public bool AllowOverwriteExisting { get; init; }
+
+    /// <summary>
+    /// 返回只替换了 <see cref="FileName"/> 的副本（预解析注入真实文件名时用）。
+    /// 本类是 init-only 类而非 record，用不了 with；新增字段时记得在这里一并复制。
+    /// </summary>
+    public NewTaskRequest WithFileName(string fileName) => new()
+    {
+        Urls = Urls,
+        Directory = Directory,
+        FileName = fileName,
+        Connections = Connections,
+        SpeedLimit = SpeedLimit,
+        Referer = Referer,
+        Headers = Headers,
+        ExtraOptions = ExtraOptions,
+        AllowOverwriteExisting = AllowOverwriteExisting
+    };
 }
 
 /// <summary>引擎启动配置。</summary>
@@ -154,6 +178,9 @@ public sealed class Aria2TaskStatus
     [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public int ErrorCode { get; set; }
     [JsonPropertyName("errorMessage")] public string? ErrorMessage { get; set; }
+    /// <summary>aria2 对错误码的人话说明（如 code 8 → "Invalid range header"）。
+    /// 部分失败（尤其续传失败）只填 errorReason、errorMessage 为空，故读列表时作为兜底。</summary>
+    [JsonPropertyName("errorReason")] public string? ErrorReason { get; set; }
     [JsonPropertyName("dir")] public string? Dir { get; set; }
     [JsonPropertyName("files")] public List<Aria2File>? Files { get; set; }
     [JsonPropertyName("followedBy")] public List<string>? FollowedBy { get; set; }

@@ -76,7 +76,12 @@ public partial class App : Application
                 using var ev = System.Threading.EventWaitHandle.OpenExisting(@"Local\KokonaDownloader_ShowWindow");
                 ev.Set();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // 第八轮 P3-7：这里原先是裸 catch{}，"第二个实例发了唤醒但界面毫无反应"
+                // 时无从判断是事件不存在（主窗口还没建起来）、还是主实例根本没在监听
+                Log($"唤醒已运行实例失败（{ex.GetType().Name}: {ex.Message}）；若界面未显示，请从托盘手动打开");
+            }
             Exit();
             return;
         }
@@ -118,6 +123,7 @@ public partial class App : Application
         {
             // 开机自启静默启动：只出现在托盘，不显示主窗口，等用户从托盘唤起
             MainWin.AppWindow.Hide();
+            MainWin.NotifyHidden(); // 界面刷新定时器随之停摆，别在看不见的窗口上空转
         }
         else
         {
@@ -132,12 +138,20 @@ public partial class App : Application
         if (win == null) return;
         win.DispatcherQueue.TryEnqueue(() =>
         {
-            win.AppWindow.Show();
-            if (win.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter p) p.Restore();
-            win.Activate();
-            // 托盘唤起时焦点常在别的进程窗口上，Activate 受系统前台锁定限制不会置顶，
+            // WinUI 侧先复位（同步 AppWindow.IsVisible 标记），再交给 Win32 做真正的显示/还原/置顶，
+            // 最后由 RevealAndActivate 核对窗口是否真的出来了（第八轮 P3-7）
+            try { win.AppWindow.Show(); } catch (Exception ex) { Log($"显示主窗口失败: {ex.Message}"); }
+            try
+            {
+                if (win.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter p) p.Restore();
+            }
+            catch (Exception ex) { Log($"还原主窗口失败: {ex.Message}"); }
+            // 隐藏期间界面刷新定时器已停摆，显示后立刻拉回（Activated 事件也兜底，双保险）
+            win.ResumeRefreshTimer();
+            // 托盘/第二个实例唤起时焦点常在别的进程窗口上，Activate 受系统前台锁定限制不会置顶，
             // 需 AttachThreadInput 强制拉到前台（与进度小窗/磁力确认窗同一处理）
-            WindowEffects.ForceForeground(win);
+            win.Activate();
+            WindowEffects.RevealAndActivate(win);
         });
     }
 

@@ -26,6 +26,10 @@ public sealed class AppHost : IAsyncDisposable
     /// <summary>上一次真正下发给引擎的值：只有相关字段变了才发 RPC（见 OnSettingsChanged）。</summary>
     private long _appliedSpeedLimit;
     private string _appliedTrackers = string.Empty;
+    /// <summary>已下发给引擎的默认目录/线程数基线（第八轮 P1-1：以前这两项改了要重启才生效）。</summary>
+    private string _appliedDefaultDir = string.Empty;
+    private int _appliedConnections;
+    private int _appliedMaxConcurrent;
 
     public AppHost(string aria2Path, SettingsStore settings, Action<string>? log = null)
     {
@@ -43,6 +47,9 @@ public sealed class AppHost : IAsyncDisposable
         // 这样第一次设置变更不会被误判成需要重新下发。
         _appliedSpeedLimit = settings.Current.GlobalSpeedLimit;
         _appliedTrackers = _cachedTrackers ?? string.Empty;
+        _appliedDefaultDir = settings.Current.DefaultDownloadDir ?? string.Empty;
+        _appliedConnections = settings.Current.DefaultConnections;
+        _appliedMaxConcurrent = settings.Current.MaxConcurrentDownloads;
 
         // 设置变化时同步引擎
         Settings.Changed += OnSettingsChanged;
@@ -74,6 +81,11 @@ public sealed class AppHost : IAsyncDisposable
     /// 设置变更 → 引擎热更新。**只下发真正变化的字段**：
     /// 历史上这里对每次 Changed 都无条件下发全局限速与 tracker 两条 RPC，
     /// 于是切换主题色这类与引擎无关的操作也会各打两次 aria2 调用。
+    ///
+    /// 可热更新的项：全局限速、BT tracker、默认下载目录、默认线程数、最大并发任务数。
+    /// 前两项靠 aria2 的 changeGlobalOption；后三项由引擎在**每次添加任务**时按当前设置
+    /// 显式下发（aria2 的 --dir/--split/--max-concurrent-downloads 只是启动快照），
+    /// 因此用户在设置里改目录后立刻新建下载就会落到新目录（第八轮 P1-1）。
     /// </summary>
     private async void OnSettingsChanged(object? sender, EventArgs e)
     {
@@ -86,6 +98,25 @@ public sealed class AppHost : IAsyncDisposable
             {
                 _appliedSpeedLimit = s.GlobalSpeedLimit;
                 await Engine.SetGlobalSpeedLimitAsync(s.GlobalSpeedLimit).ConfigureAwait(false);
+            }
+
+            // 默认目录/线程数：引擎在每次添加任务时显式下发当前默认值，改完立刻对新任务生效
+            if (!string.IsNullOrWhiteSpace(s.DefaultDownloadDir) &&
+                !string.Equals(s.DefaultDownloadDir, _appliedDefaultDir, StringComparison.Ordinal))
+            {
+                Engine.UpdateRuntimeDefaults(defaultDownloadDir: s.DefaultDownloadDir);
+                _appliedDefaultDir = s.DefaultDownloadDir;
+            }
+            if (s.DefaultConnections > 0 && s.DefaultConnections != _appliedConnections)
+            {
+                Engine.UpdateRuntimeDefaults(defaultConnections: s.DefaultConnections);
+                _appliedConnections = s.DefaultConnections;
+            }
+            // 最大并发：aria2 支持经 RPC 改，立即生效（否则改了要重启才起作用）
+            if (s.MaxConcurrentDownloads > 0 && s.MaxConcurrentDownloads != _appliedMaxConcurrent)
+            {
+                _appliedMaxConcurrent = s.MaxConcurrentDownloads;
+                await Engine.SetMaxConcurrentDownloadsAsync(s.MaxConcurrentDownloads).ConfigureAwait(false);
             }
 
             // tracker 开关/列表变化时热更新引擎（读内存缓存，不再每次读盘）

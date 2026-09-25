@@ -33,8 +33,18 @@ ok(KokonaLogic.isFreshDownload(mkItem({}), EXT_START) === true,
     "fresh in_progress download should be captured");
 ok(KokonaLogic.isFreshDownload(mkItem({ state: "complete" }), EXT_START) === false,
     "complete item (history replay) should NOT be captured");
-ok(KokonaLogic.isFreshDownload(mkItem({ state: "interrupted" }), EXT_START) === false,
-    "interrupted item (history replay) should NOT be captured");
+// Round 8 (P3-5): a freshly interrupted download must still be captured.
+// 404 / connection-refused downloads often flip to "interrupted" before the MV3
+// service worker even runs onCreated, so rejecting every non-in_progress item meant
+// failing links silently never reached the client.
+ok(KokonaLogic.isFreshDownload(mkItem({ state: "interrupted" }), EXT_START) === true,
+    "fresh interrupted item (404 etc.) should be captured");
+ok(KokonaLogic.isFreshDownload(mkItem({ state: "interrupted", startTime: iso(NOW - 86400000) }), EXT_START) === false,
+    "interrupted item from yesterday (history replay) should NOT be captured");
+ok(KokonaLogic.isFreshDownload(mkItem({ state: "interrupted", startTime: iso(NOW - 10000) }), EXT_START) === false,
+    "interrupted item predating extension start should NOT be captured");
+ok(KokonaLogic.isFreshDownload(mkItem({ state: "interrupted", filename: "C:/Users/x/Downloads/f.zip" }), EXT_START) === false,
+    "interrupted item with a saved path should NOT be captured");
 ok(KokonaLogic.isFreshDownload(mkItem({ filename: "C:/Users/x/Downloads/f.zip" }), EXT_START) === false,
     "item with real file path (already on disk = replay) should NOT be captured");
 ok(KokonaLogic.isFreshDownload(mkItem({ startTime: iso(NOW - 86400000) }), EXT_START) === false,
@@ -53,6 +63,8 @@ ok(KokonaLogic.shouldCapture(mkItem({}), S, EXT_START) === true,
     "shouldCapture: brand-new download + extStart -> capture");
 ok(KokonaLogic.shouldCapture(mkItem({ state: "complete" }), S, EXT_START) === false,
     "shouldCapture: history replay -> NOT capture");
+ok(KokonaLogic.shouldCapture(mkItem({ state: "interrupted" }), S, EXT_START) === true,
+    "shouldCapture: freshly interrupted (error link) -> capture");
 ok(KokonaLogic.shouldCapture(mkItem({ url: "http://127.0.0.1:16800/api/ping" }), S, EXT_START) === false,
     "shouldCapture: own API url -> NOT capture");
 ok(KokonaLogic.shouldCapture(mkItem({ url: "blob:https://x.com/u" }), S, EXT_START) === false,

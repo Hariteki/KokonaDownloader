@@ -79,16 +79,23 @@ var KokonaLogic = (function () {
      *  - Edge 会话恢复/下载历史同步会把旧下载项重新触发 onCreated
      *  - 旧 aria2 类下载器/扩展遗留的已完成条目在启动时被回放
      * 判定（满足任一即视为历史项，不捕获）：
-     *  1. 已开始（state 非 in_progress）：已完成/已中断/未知态
+     *  1. 已经正常完成（state === 'complete'）：文件已在磁盘上，回放特征
      *  2. 已有实际保存路径（filename 非空）：说明文件已在磁盘上（回放特征）
      *  3. 开始时间早于扩展启动时刻：启动防火墙
      *  4. 开始时间距今超过 30 秒：非本次新发起
+     *
+     * 第 1 条在第八轮放宽过：原先"state 不是 in_progress 就拒绝"，可 404、连接被拒这类
+     * 下载常在扩展的 onCreated 回调真正跑到之前就已经翻成 interrupted（MV3 service worker
+     * 冷启动有延迟），于是**越是出错的链接越不会进客户端**，用户看到的是"点了没反应"。
+     * 现在只拦"已完成"，中断态交给第 3/4 条时间窗判断是否本次新发起；
+     * 第 2 条保持严格（有落盘路径仍视为回放），避免把历史项重新下一遍。
      * @param {object} item chrome.downloads.DownloadItem
      * @param {number} extStartMs 启动防火墙基准时刻（Date.now()，应按浏览器会话持久化）；不传则跳过该项检查
      */
     function isFreshDownload(item, extStartMs) {
         if (!item) return false;
-        if (item.state && item.state !== 'in_progress') return false;
+        if (item.state === 'complete') return false;
+        if (item.state && item.state !== 'in_progress' && item.state !== 'interrupted') return false;
         if (item.filename) return false;
         var t = Date.parse(item.startTime || '');
         if (isNaN(t)) return true;

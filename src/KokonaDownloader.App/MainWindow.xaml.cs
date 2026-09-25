@@ -24,6 +24,8 @@ public partial class MainWindow : Window, IDisposable
     private readonly ObservableCollection<TaskItemViewModel> _tasks = new();
     private readonly Dictionary<string, TaskItemViewModel> _taskMap = new();
     private readonly DispatcherTimer _timer = new();
+    /// <summary>界面刷新定时器当前是否在跑（只在 UI 线程读写，见 StopTimerForHidden/ResumeRefreshTimer）。</summary>
+    private bool _timerRunning = true;
     private EventWaitHandle? _showEvent;
     private RegisteredWaitHandle? _showEventWait;
     private string _filter = "all";
@@ -169,8 +171,9 @@ public partial class MainWindow : Window, IDisposable
         // 主题服务：资源覆盖 + 原生标题栏着色（内部已订阅设置变更与系统强调色变化）
         ThemeService.Register(this);
         ThemeService.ThemeChanged += OnThemeChangedRefreshSelectionVisuals;
-        // 窗口激活后再应用一次，确保标题栏颜色在首帧之后生效
-        Activated += (_, _) => ApplyTheme();
+        // 窗口激活后再应用一次，确保标题栏颜色在首帧之后生效；
+        // 顺带恢复刷新定时器：从托盘/任务栏重新显示窗口时，Tick 可能已因"窗口不可见"而停摆
+        Activated += (_, _) => { ApplyTheme(); ResumeRefreshTimer(); };
         BuildThemeMenu();
 
         // 引擎事件：托盘进度 + 完成/失败通知（引擎轮询线程触发，需切回 UI 线程）
@@ -219,6 +222,7 @@ public partial class MainWindow : Window, IDisposable
         {
             args.Cancel = true;
             AppWindow.Hide();
+            StopTimerForHidden(); // 隐藏后界面刷新不再有产出，定时器立即让出 CPU（见 RefreshAsync）
             return;
         }
         // 点 X 直接退出时同样走快速退出路径，避免优雅关闭的长等待与进程残留
@@ -529,6 +533,31 @@ public partial class MainWindow : Window, IDisposable
     }
 
     /// <summary>
+    /// 主窗不可见时停掉界面刷新定时器（幂等）。隐藏态继续跑等于纯烧 CPU：
+    /// 实测最小化到托盘后仍占 0.57 % 单核（测试报告 §12-B 表 2），而这段时间列表没人看。
+    /// 引擎侧轮询与托盘图标更新不受影响，恢复显示时 ResumeRefreshTimer 会重新拉起。
+    /// </summary>
+    private void StopTimerForHidden()
+    {
+        if (!_timerRunning) return;
+        _timerRunning = false;
+        _timer.Stop();
+        App.Log("[ui] 主窗口不可见，暂停界面刷新定时器");
+    }
+
+    /// <summary>主窗可见时恢复界面刷新（幂等；Activated 与托盘唤起路径都会调用）。</summary>
+    public void ResumeRefreshTimer()
+    {
+        if (_timerRunning) return;
+        _timerRunning = true;
+        _timer.Start();
+        App.Log("[ui] 主窗口可见，恢复界面刷新定时器");
+    }
+
+    /// <summary>外部告知"窗口已隐藏"（App 的 --minimized 静默启动路径），立刻停表。</summary>
+    public void NotifyHidden() => DispatcherQueue.TryEnqueue(StopTimerForHidden);
+
+    /// <summary>
     /// 界面定时刷新。数据来源是引擎轮询推送的快照（<see cref="OnEngineEvent"/> 里的 StatsUpdated），
     /// **不再自己打 RPC**：原先这里每 900ms 要发 4 次 aria2 调用（3 次列表 + 1 次统计），
     /// 与引擎自身的轮询完全重复，是常驻开销的第二大来源。
@@ -536,6 +565,16 @@ public partial class MainWindow : Window, IDisposable
     /// </summary>
     private async Task RefreshAsync()
     {
+        // 兜底停表：不论窗口经哪条路径隐藏（点 X 收进托盘、开机静默启动、外部直接 Hide），
+        // 至多多跑一个 Tick 就会在这里自己停下来；恢复显示由 Activated / ResumeRefreshTimer 负责。
+        // 判据用 WindowVisibleByAnySignal：只看 AppWindow.IsVisible 会在"窗口被外部 ShowWindow 复原、
+        // 而 WinUI 标记仍是 false"时把界面永久冻住（屏幕上有窗口却再也不刷新），实测复现过。
+        if (!WindowEffects.WindowVisibleByAnySignal(this))
+        {
+            StopTimerForHidden();
+            return;
+        }
+
         if (App.Host?.Engine == null || !App.Host.Engine.IsRunning)
         {
             ConnStatusText.Text = "引擎未运行";
@@ -564,9 +603,10 @@ public partial class MainWindow : Window, IDisposable
             ActiveCountText.Text = $"活动 {stat.NumActive} · 等待 {stat.NumWaiting}";
             ConnStatusText.Text = "引擎运行中";
             MergeTasks(tasks);
-            // 兜底：定时刷新时重刷可见容器的选中视觉，覆盖虚拟化回收再实例化
-            ApplySelectionVisuals(TaskList);
-            ApplySelectionVisuals(BtList);
+            // 兜底：定时刷新时重刷可见容器的选中视觉，覆盖虚拟化回收再实例化。
+            // 常规列表与 BT 专用页互斥显示，隐藏的那一个没有可见内容可刷，跳过（省一半视觉遍历）。
+            if (TaskList.Visibility == Visibility.Visible) ApplySelectionVisuals(TaskList);
+            if (BtPage.Visibility == Visibility.Visible) ApplySelectionVisuals(BtList);
         });
     }
 
@@ -594,7 +634,9 @@ public partial class MainWindow : Window, IDisposable
 
     private void ApplyView()
     {
-        UpdateBtSummary();
+        // BT 概要条属于 BT 专用页：三趟 LINQ 扫描 + 拼串在隐藏页每 900ms 白做一次没有意义，
+        // 切到 BT 页时 OnFilterChanged 已翻好可见性，这里会照常刷新一次。
+        if (BtPage.Visibility == Visibility.Visible) UpdateBtSummary();
         var filtered = _taskMap.Values.Where(MatchesFilter).ToList();
         // 排序：恒定按添加时间倒序（新任务在顶部），不随状态变化，避免暂停/继续等操作导致列表跳动
         filtered = filtered

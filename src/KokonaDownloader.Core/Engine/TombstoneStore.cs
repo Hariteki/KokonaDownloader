@@ -77,12 +77,19 @@ public sealed class TombstoneStore
     /// <summary>
     /// 启动 aria2 前过滤会话文件：按条目块（URI 首行 + 缩进选项行）解析，
     /// 命中墓碑的块整块移除，返回清除的条目数。
+    /// <paramref name="extra"/> 允许调用方临时追加"也要一并过滤"的 URL+目录（不落盘、不记墓碑），
+    /// 用于挡掉客户端已知早就下载完成、却仍留在会话文件里的条目。
     /// </summary>
-    public int PurgeSessionFile(string sessionFile)
+    public int PurgeSessionFile(string sessionFile, ICollection<(string Url, string? Dir)>? extra = null)
     {
         lock (_lock)
         {
-            if (_hashes.Count == 0 || !File.Exists(sessionFile)) return 0;
+            if (!File.Exists(sessionFile)) return 0;
+            if (_hashes.Count == 0 && (extra is null || extra.Count == 0)) return 0;
+            var hits = new HashSet<string>(_hashes.Keys);
+            if (extra != null)
+                foreach (var (url, dir) in extra)
+                    if (!string.IsNullOrWhiteSpace(url)) hits.Add(HashOf(url, dir));
             try
             {
                 var lines = File.ReadAllLines(sessionFile);
@@ -101,7 +108,7 @@ public sealed class TombstoneStore
                     var dirLine = block.Select(l => l.TrimStart())
                         .FirstOrDefault(l => l.StartsWith("dir=", StringComparison.OrdinalIgnoreCase));
                     var dir = dirLine is null ? null : dirLine["dir=".Length..].Trim();
-                    if (block.Any(l => Matches(l, dir)))
+                    if (block.Any(l => Matches(l, dir, hits)))
                     {
                         purged++;
                         continue;
@@ -120,13 +127,13 @@ public sealed class TombstoneStore
         }
     }
 
-    private bool Matches(string line, string? dir)
+    private bool Matches(string line, string? dir, HashSet<string> hits)
     {
         var trimmed = line.Trim();
         if (trimmed.Length == 0 || trimmed.StartsWith('#')) return false;
         foreach (var token in trimmed.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
-            if (_hashes.ContainsKey(HashOf(token, dir))) return true;
+            if (hits.Contains(HashOf(token, dir))) return true;
         }
         return false;
     }

@@ -46,6 +46,24 @@ public static class WindowEffects
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hwnd, int nCmdShow);
 
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hwnd);
+
+    /// <summary>
+    /// 「这个窗口现在真的看得见吗」——两个信号任一为真即算可见：
+    /// WinUI 自己的 <c>AppWindow.IsVisible</c> 标记，以及 Win32 对该 HWND 的实际判断。
+    ///
+    /// 为什么要两个信号：外部（脚本、辅助工具、任务管理器之外的自动化）直接对 HWND 调
+    /// <c>ShowWindow</c> 时，WinUI 的标记仍停在 <c>false</c>（它只认自己的 Hide/Show）。
+    /// 只看标记做判断，会出现"窗口明明在屏幕上、界面却再也不刷新"的僵局
+    /// ——刷新定时器的隐藏态停表（见 MainWindow.RefreshAsync）正是一处这样的判断，故这里以实际窗口状态兜底。
+    /// </summary>
+    public static bool WindowVisibleByAnySignal(Window window)
+    {
+        try { if (window.AppWindow.IsVisible) return true; } catch { /* 窗口已销毁等 */ }
+        try { return IsWindowVisible(WinRT.Interop.WindowNative.GetWindowHandle(window)); } catch { return false; }
+    }
+
     [DllImport("comctl32.dll", SetLastError = true)]
     private static extern bool SetWindowSubclass(IntPtr hwnd, SUBCLASSPROC pfnSubclass, UIntPtr uIdSubclass, UIntPtr dwRefData);
 
@@ -188,6 +206,46 @@ public static class WindowEffects
             }
         }
         catch (Exception ex) { App.Log($"窗口置顶失败: {ex.Message}"); }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hwnd);
+
+    /// <summary>
+    /// 显示 + 还原 + 置顶，并**核对结果**（第八轮 P3-7：从托盘/第二个实例唤醒时偶发"进程活着但窗口不出来"）。
+    ///
+    /// 与 <see cref="ForceForeground"/> 的关键差异：那里只用 SW_SHOW，而 SW_SHOW 对
+    /// **已最小化**的窗口是"保持当前（最小化）状态显示"——窗口依旧缩在任务栏角上。
+    /// 唤醒路径必须先 SW_RESTORE 还原；改完再实测一次窗口是否真的可见且未最小化，
+    /// 不行就重试一次，仍不行就留下日志，不再静默失败。
+    /// </summary>
+    /// <returns>最终窗口是否可见且未最小化。</returns>
+    public static bool RevealAndActivate(Window window)
+    {
+        IntPtr hwnd;
+        try { hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window); }
+        catch (Exception ex) { App.Log($"唤醒主窗口失败：取不到窗口句柄（{ex.Message}）"); return false; }
+        if (hwnd == IntPtr.Zero)
+        {
+            App.Log("唤醒主窗口失败：窗口句柄为 0（窗口可能已销毁）");
+            return false;
+        }
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                // 9 = SW_RESTORE（还原并显示），5 = SW_SHOW（显示但保持当前状态）
+                ShowWindow(hwnd, IsIconic(hwnd) ? 9 : 5);
+                if (!IsWindowVisible(hwnd)) ShowWindow(hwnd, 9); // 仍不可见说明处于隐藏态，再强推一次
+                BringWindowToTop(hwnd);
+                SetForegroundWindow(hwnd);
+            }
+            catch (Exception ex) { App.Log($"唤醒主窗口异常: {ex.Message}"); }
+            if (IsWindowVisible(hwnd) && !IsIconic(hwnd)) return true;
+        }
+        App.Log("唤醒主窗口后窗口仍不可见或被最小化（系统前台锁定/窗口已销毁），请在托盘或任务栏手动打开");
+        return false;
     }
 
     /// <summary>
