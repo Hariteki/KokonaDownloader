@@ -1,4 +1,4 @@
-# 单文件 exe 验证（构建嵌入检查 + A 干净目录 + B dist 目录）
+﻿# 单文件 exe 验证（构建嵌入检查 + A 干净目录 + B dist 目录）
 Add-Type @'
 using System;
 using System.Collections.Generic;
@@ -79,16 +79,21 @@ $bytes = [System.IO.File]::ReadAllBytes("$dist\$exeName")
 $text = [System.Text.Encoding]::ASCII.GetString($bytes)
 $names = @("standalone/App.xbf","standalone/BtPieceGrid.xbf","standalone/MagnetConfirmWindow.xbf",
           "standalone/MainWindow.xbf","standalone/NewDownloadDialog.xbf","standalone/ProgressWindow.xbf",
-          "standalone/SettingsWindow.xbf","standalone/SplashWindow.xbf",
+          "standalone/SettingsWindow.xbf",
           "standalone/Themes/ThemeSwatchPicker.xbf",
           "standalone/resources.pri","standalone/aria2c.exe","standalone/icons/tray.ico","standalone/icons/tray.png")
 $missing = 0
 foreach ($n in $names) {
     if ($text.Contains($n)) { Write-Host ("  OK   " + $n) } else { Write-Host ("  MISS " + $n); $missing++ }
 }
-if ($missing -eq 0) { Write-Host "PASS: 13/13 embedded resources present" } else { Write-Host "FAIL: $missing missing" }
+# 启动动画 SplashWindow 已在 1.0.8 移除（项目文档 §12「移除启动动画」），
+# 载荷是 8 个 xbf + resources.pri + aria2c.exe + 2 个图标 = 12 个文件
+if ($missing -eq 0) { Write-Host "PASS: 12/12 embedded resources present" } else { Write-Host "FAIL: $missing missing" }
 
-# ════ 测试 A：干净临时目录，只放 exe（含 B.1 splash 复测）════
+# ════ 测试 A：干净临时目录，只放 exe ════
+# 产品语义（第九轮起，见 StandaloneBootstrap）：exe 目录必须保持干净 —— 载荷一律解压到
+#   %LOCALAPPDATA%\KokonaDownloader\Standalone 并从那里重新拉起，exe 旁不留任何文件。
+#   启动动画（SplashWindow）已在 1.0.8 移除，故不再断言 splash 窗口。
 Write-Host ""
 Write-Host "=== test A: clean temp dir, exe only ==="
 Stop-App
@@ -97,16 +102,25 @@ if (Test-Path $dirA) { Remove-Item $dirA -Recurse -Force }
 New-Item -ItemType Directory -Path $dirA | Out-Null
 Copy-Item "$dist\$exeName" $dirA
 $resA = Probe-Launch -Path "$dirA\$exeName" -Workdir $dirA
-if ($resA.SplashSeen) { Write-Host "PASS: splash visible on single-file exe (B.1)" } else { Write-Host "FAIL: splash not seen in test A" }
 
 $ping = Test-Ping
 Write-Host ("ping: " + $ping)
-if ($null -ne $ping -and $ping -match '"version":"1\.0\.8"') { Write-Host "PASS: ping 200 version 1.0.8" } else { Write-Host "FAIL: ping missing or wrong version" }
+if ($null -ne $ping -and $ping -match '"version":"1\.0\.9"') { Write-Host "PASS: ping 200 version 1.0.9" } else { Write-Host "FAIL: ping missing or wrong version" }
 
-# 载荷含子目录（icons\、Themes\），必须递归统计；排除 exe 自身 → 期望 13 个载荷文件
-$payload = @(Get-ChildItem $dirA -Recurse -File | Where-Object { $_.Name -ne $exeName })
-Write-Host ("payload files next to exe (recursive, excl. exe): " + $payload.Count)
-if ($payload.Count -ge 13) { Write-Host "PASS: payload extracted (>=13 files)" } else { Write-Host "FAIL: only $($payload.Count) files" }
+# exe 目录保持干净：除 exe 自己外不应有任何解压出来的文件
+$leftover = @(Get-ChildItem $dirA -Recurse -File | Where-Object { $_.Name -ne $exeName })
+if ($leftover.Count -eq 0) { Write-Host "PASS: exe dir stays clean (nothing extracted next to exe)" }
+else { Write-Host ("FAIL: $($leftover.Count) file(s) leaked next to exe: " + (($leftover | ForEach-Object { $_.Name }) -join ', ')) }
+
+# 运行时文件必须落在 %LOCALAPPDATA%\KokonaDownloader\Standalone，且跑的是**这一份** exe
+$rt = Join-Path $env:LOCALAPPDATA "KokonaDownloader\Standalone"
+$rtPayload = @(Get-ChildItem $rt -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -ne $exeName -and $_.Name -ne ".kokona_bootstrap.json" })
+$rtExe = Join-Path $rt $exeName
+$rtExeOk = (Test-Path $rtExe) -and ((Get-Item $rtExe).Length -eq (Get-Item "$dist\$exeName").Length)
+Write-Host ("standalone runtime dir: payload=$($rtPayload.Count) exeSizeMatchesDist=$rtExeOk")
+if ($rtPayload.Count -ge 12 -and $rtExeOk) { Write-Host "PASS: runtime payload extracted to LOCALAPPDATA (>=12 files, exe matches dist)" }
+else { Write-Host "FAIL: standalone runtime dir incomplete" }
 
 $log = Get-Content "$env:APPDATA\KokonaDownloader\app.log" -Tail 40 -ErrorAction SilentlyContinue
 if ($log | Select-String "XamlParseException") { Write-Host "FAIL: XamlParseException in log" } else { Write-Host "PASS: no XamlParseException in recent log" }
@@ -118,7 +132,7 @@ Write-Host "=== test B: dist dir (loose files present) ==="
 $resB = Probe-Launch -Path "$dist\$exeName" -Workdir $dist
 $pingB = Test-Ping
 Write-Host ("ping: " + $pingB)
-if ($null -ne $pingB -and $pingB -match '"version":"1\.0\.8"') { Write-Host "PASS: dist dir launch works, ping 200 v1.0.8" } else { Write-Host "FAIL: dist dir launch broken" }
+if ($null -ne $pingB -and $pingB -match '"version":"1\.0\.9"') { Write-Host "PASS: dist dir launch works, ping 200 v1.0.9" } else { Write-Host "FAIL: dist dir launch broken" }
 Stop-App
 
 Write-Host ""

@@ -14,8 +14,27 @@ public sealed class Aria2Process : IDisposable
     private readonly Action<string>? _log;
     private readonly TombstoneStore? _tombstones;
 
-    public bool IsRunning => _process is { HasExited: false };
-    public int? ExitCode => _process?.HasExited == true ? _process.ExitCode : null;
+    /// <summary>aria2 子进程是否在运行。
+    /// 注意 <see cref="Process.HasExited"/> 对"从未成功启动的进程对象"会抛
+    /// InvalidOperationException（No process is associated with this object）——
+    /// 一次启动失败就会把它变成永远抛异常的毒药对象，让后续的引擎自愈全部失效（连轮询看门狗都会被打死）。
+    /// 这里统一按"没在运行"处理。</summary>
+    public bool IsRunning
+    {
+        get
+        {
+            try { return _process is { HasExited: false }; }
+            catch { return false; }
+        }
+    }
+    public int? ExitCode
+    {
+        get
+        {
+            try { return _process?.HasExited == true ? _process.ExitCode : null; }
+            catch { return null; }
+        }
+    }
 
     public Aria2Process(EngineConfig config, TombstoneStore? tombstones = null, Action<string>? log = null)
     {
@@ -56,10 +75,17 @@ public sealed class Aria2Process : IDisposable
 
         _process = new Process { StartInfo = psi };
         // aria2c 控制台输出里大量是空白/纯空格行（实测占历史日志 96%）：只记录有实际内容的行，
-        // 否则 app.log 会以 ~8MB/天 无界膨胀且几乎全是噪音。
+        // 否则 app.log 会以 ~8MB/天无界膨胀且几乎全是噪音。
         _process.OutputDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) _log?.Invoke($"[aria2] {e.Data}"); };
         _process.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) _log?.Invoke($"[aria2!err] {e.Data}"); };
-        _process.Start();
+        try { _process.Start(); }
+        catch
+        {
+            // 启动失败（路径不存在、端口被占等）必须丢弃这个半初始化的进程对象：
+            // 留着它会让 IsRunning/ExitCode 永远抛 InvalidOperationException，引擎自愈再也起不来。
+            _process = null;
+            throw;
+        }
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();
         try { File.WriteAllText(PidFile, _process.Id.ToString()); } catch { }

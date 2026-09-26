@@ -44,6 +44,19 @@ public sealed class DownloadEngine : IAsyncDisposable
     /// <summary>本会话内新建任务的 Gid 标记：轮询首次上报时消费并随事件携带 IsNewTask。</summary>
     private readonly ConcurrentDictionary<string, byte> _newTaskGids = new();
 
+    /// <summary>
+    /// 待校验的磁力添加（第十一轮，见测试报告 §16-G #11 / §16-H）：aria2 对"同 infohash 已在引擎
+    /// 注册"的新 addUri 会先正常返回 gid、随后**静默丢弃**该任务，gid 在 tellStatus/tell* 里查无此人，
+    /// 界面就留一条永不报错的 0% 幻影行。添加时登记 gid，轮询里确认它是否真被 aria2 注册过；
+    /// 超过期限仍未出现则标失败并写明原因。键为 gid。
+    /// </summary>
+    private readonly ConcurrentDictionary<string, PendingMagnetAdd> _pendingMagnetAdds = new();
+
+    /// <summary>磁力添加后的存活校验期限：超过它仍未出现在 aria2 的 tell* 列表里即判定被静默丢弃。</summary>
+    private const int MagnetLivenessTimeoutMs = 6000;
+
+    private sealed record PendingMagnetAdd(string Magnet, long TaskNumber, DateTime Deadline);
+
     /// <summary>最近一次轮询得到的任务快照：UI 定时刷新与"下载前重复预检"直接复用它，
     /// 省掉各自再打一轮 RPC（界面原本每 900ms 自己拉 4 次、每次下载前又拉 3 次）。</summary>
     private volatile List<DownloadTaskInfo> _latestSnapshot = new();
@@ -573,8 +586,12 @@ public sealed class DownloadEngine : IAsyncDisposable
                 for (var i = 0; i < Math.Min(3, call.Count); i++)
                     raws.AddRange(call.DeserializeList<Aria2TaskStatus>(i));
 
-                // 兜底清理：aria2 对已注册种子的重复添加会生成 "already registered" 失败任务，
-                // 预检存在时间窗（元数据阶段哈希未知），这里把漏网的噪音任务直接从 aria2 与列表中清除
+                // 磁力"幻影行"校验：确认最近添加的磁力是否真被 aria2 注册（必须在 followedBy 处理之前）。
+                ResolvePendingMagnetAdds(raws);
+
+                // 兜底处理：预检存在时间窗（元数据阶段哈希未知），漏网的重复添加会以 "already registered"
+                // 错误任务的形式出现。清理掉 aria2 里的噪音结果，同时把这一行标成失败并写明中文原因——
+                // 修复前它是直接删行，用户在界面上既看不到任务也看不到"为什么没加上"。
                 var dupFailGids = raws
                     .Where(r => r.Status == "error" &&
                                 r.ErrorMessage?.Contains("already registered", StringComparison.OrdinalIgnoreCase) == true)
@@ -583,15 +600,12 @@ public sealed class DownloadEngine : IAsyncDisposable
                 {
                     foreach (var g in dupFailGids)
                     {
+                        _log($"磁力/种子添加被引擎以 already registered 错误拒绝: gid={g}");
                         try { await _client.RemoveDownloadResultAsync(g, ct).ConfigureAwait(false); } catch { }
-                        _store.RemoveMeta(g);
-                        _lastStates.TryRemove(g, out _);
-                        EngineEvent?.Invoke(this, new EngineEventArgs
-                        {
-                            Type = "TaskRemoved",
-                            Task = new DownloadTaskInfo { Gid = g, State = TaskState.Removed }
-                        });
-                        _log($"清理重复种子失败任务 gid={g}");
+                        var dupMeta = _store.GetMeta(g);
+                        FailDuplicateBtAdd(g,
+                            dupMeta?.SourceMagnet ?? dupMeta?.Urls.FirstOrDefault(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase)),
+                            dupMeta?.TaskNumber ?? NextTaskNumber());
                     }
                     raws = raws.Where(r => !dupFailGids.Contains(r.Gid)).ToList();
                 }
@@ -833,6 +847,67 @@ public sealed class DownloadEngine : IAsyncDisposable
         }
     }
 
+    /// <summary>登记一次磁力添加的存活校验（见 <see cref="_pendingMagnetAdds"/>）。</summary>
+    private void TrackMagnetLiveness(string gid, string magnet, long taskNumber)
+        => _pendingMagnetAdds[gid] = new PendingMagnetAdd(
+            magnet, taskNumber, DateTime.Now.AddMilliseconds(MagnetLivenessTimeoutMs));
+
+    /// <summary>
+    /// 校验待确认的磁力添加：出现在本轮（或此前任一轮）tell* 结果里 = aria2 真的注册了它，解除跟踪；
+    /// 超过 <see cref="MagnetLivenessTimeoutMs"/> 仍未出现 = 被静默丢弃（同 infohash 已注册），标失败。
+    /// 必须在 followedBy 处理**之前**调用：元数据任务一旦被消费，它的 gid 就会从 aria2 列表里消失。
+    /// </summary>
+    private void ResolvePendingMagnetAdds(List<Aria2TaskStatus> raws)
+    {
+        if (_pendingMagnetAdds.IsEmpty) return;
+        var seen = new HashSet<string>(raws.Select(r => r.Gid), StringComparer.OrdinalIgnoreCase);
+        foreach (var (gid, pending) in _pendingMagnetAdds)
+        {
+            if (seen.Contains(gid))
+            {
+                _pendingMagnetAdds.TryRemove(gid, out _);
+                continue;
+            }
+            if (DateTime.Now < pending.Deadline) continue;
+            if (!_pendingMagnetAdds.TryRemove(gid, out _)) continue;
+            _log($"添加 {MagnetLivenessTimeoutMs}ms 后仍未出现在 tell* 中（引擎静默丢弃）: gid={gid} {pending.Magnet}");
+            FailDuplicateBtAdd(gid, pending.Magnet, pending.TaskNumber);
+        }
+    }
+
+    /// <summary>
+    /// 把"同 infohash 已在引擎注册"的重复添加标成失败（写本地历史 + 推事件），原因用中文写给用户。
+    /// 两条路径都汇到这里：
+    ///  1. aria2 直接生成 "already registered" 错误任务（<paramref name="gid"/> 出现在 tellStopped）；
+    ///  2. aria2 **静默丢弃** addUri，gid 在 tell* 里查无此人（由 <see cref="ResolvePendingMagnetAdds"/> 判定）。
+    /// 修复前这两条分别表现为"行悄悄消失"与"界面留一条永不报错的 0% 幻影行"（测试报告 §16-G #11）。
+    /// </summary>
+    private void FailDuplicateBtAdd(string gid, string? source, long taskNumber)
+    {
+        var isMagnet = source?.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase) == true;
+        var reason = $"同一{(isMagnet ? "磁力" : "种子")}已在下载或做种中：引擎未注册本次添加，无需重复添加";
+        _log($"重复 BT 任务未被引擎注册，判定为重复添加: gid={gid} {source}");
+        var meta = _store.GetMeta(gid);
+        var info = new DownloadTaskInfo
+        {
+            Gid = gid,
+            TaskNumber = taskNumber,
+            Name = string.IsNullOrWhiteSpace(meta?.Name) ? (source ?? gid) : meta!.Name,
+            Urls = meta is { Urls.Count: > 0 } ? meta.Urls.ToList() : new List<string> { source ?? gid },
+            State = TaskState.Failed,
+            IsBt = true,
+            Dir = meta?.Dir,
+            ErrorMessage = reason,
+            AddedAt = meta?.AddedAt ?? DateTime.Now,
+            FinishedAt = DateTime.Now
+        };
+        try { _store.UpdateFinished(info); }
+        catch (Exception ex) { _log($"写入失效 BT 任务终态失败: {ex.Message}"); }
+        RememberHistory(info);   // 本地历史：列表与 API 都会带上这一行（失败原因在 errorMessage）
+        InvalidateSnapshot();
+        EngineEvent?.Invoke(this, new EngineEventArgs { Type = "TaskChanged", Task = info });
+    }
+
     /// <summary>
     /// 检测与给定 URL 重复的"未结束"任务（下载中/排队/暂停/做种中）。
     /// 已完成、失败、已移除的任务不算重复——用户可能已删除下载好的文件，重新添加应作为新任务开始。
@@ -898,6 +973,8 @@ public sealed class DownloadEngine : IAsyncDisposable
             }
             _log($"检测到下载引擎已退出，正在自动重启：{reason}");
             _lastStates.Clear();
+            // 重启后 gid 全部失效：待校验的磁力添加不可能再出现在 tell* 里，不清掉会误判成"被静默丢弃"
+            _pendingMagnetAdds.Clear();
             _process.Start(FinishedSessionEntries());
             await _process.WaitForReadyAsync(_client, 8000, ct).ConfigureAwait(false);
             _log("下载引擎已自动重启");
@@ -921,12 +998,18 @@ public sealed class DownloadEngine : IAsyncDisposable
              || ex.Message.Contains("连接", StringComparison.Ordinal)
              || ex.Message.Contains("Unable to connect", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>带自愈的 addUri：连接类异常先重启引擎再重试一次，仍失败则换成能看懂的中文错误。</summary>
-    private async Task<string> AddUriWithGuardAsync(NewTaskRequest req, CancellationToken ct)
+    /// <summary>
+    /// 引擎自愈守卫（第十一轮把守卫从"只有 addUri 路径"上移到所有 RPC 调用点）：
+    /// 传输层异常（掉线/被杀/端口未就绪）时先重启引擎再重试**一次**，仍失败则抛中文说明的异常。
+    /// 原先暂停/恢复/删除遇到引擎掉线会把 SocketException 直接抛到 HTTP 层（测试报告 §16-H 遗留项）。
+    /// </summary>
+    /// <param name="action">动作的中文名，用于日志与错误文案（如"暂停任务"）。</param>
+    /// <param name="op">实际的 RPC 调用；同一次调用会被执行最多两次（重试时用同一个委托）。</param>
+    private async Task<T> WithEngineGuardAsync<T>(string action, Func<CancellationToken, Task<T>> op, CancellationToken ct)
     {
         try
         {
-            return await _client.AddUriAsync(req, ct).ConfigureAwait(false);
+            return await op(ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsEngineUnreachable(ex) && !ct.IsCancellationRequested)
         {
@@ -940,46 +1023,32 @@ public sealed class DownloadEngine : IAsyncDisposable
             }
             try
             {
-                var gid = await _client.AddUriAsync(req, ct).ConfigureAwait(false);
-                _log("引擎重启后重试添加任务成功");
-                return gid;
+                var result = await op(ct).ConfigureAwait(false);
+                _log($"引擎重启后重试{action}成功");
+                return result;
             }
             catch (Exception retryEx)
             {
-                throw new InvalidOperationException($"下载引擎不可用，重启后仍无法添加任务：{retryEx.Message}", retryEx);
+                throw new InvalidOperationException($"下载引擎不可用，重启后仍无法{action}：{retryEx.Message}", retryEx);
             }
         }
     }
 
+    /// <summary>无返回值版本的引擎自愈守卫。</summary>
+    private async Task WithEngineGuardAsync(string action, Func<CancellationToken, Task> op, CancellationToken ct)
+        => await WithEngineGuardAsync<object?>(action, async c =>
+        {
+            await op(c).ConfigureAwait(false);
+            return null;
+        }, ct).ConfigureAwait(false);
+
+    /// <summary>带自愈的 addUri：连接类异常先重启引擎再重试一次，仍失败则换成能看懂的中文错误。</summary>
+    private Task<string> AddUriWithGuardAsync(NewTaskRequest req, CancellationToken ct)
+        => WithEngineGuardAsync("添加任务", c => _client.AddUriAsync(req, c), ct);
+
     /// <summary>批量版的自愈 addUri（与 <see cref="AddUriWithGuardAsync"/> 同一策略）。</summary>
-    private async Task<List<string>> AddUriBatchWithGuardAsync(List<NewTaskRequest> reqs, CancellationToken ct)
-    {
-        try
-        {
-            return await _client.AddUriBatchAsync(reqs, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (IsEngineUnreachable(ex) && !ct.IsCancellationRequested)
-        {
-            try
-            {
-                await RestartEngineIfNeededAsync(ex.Message).ConfigureAwait(false);
-            }
-            catch (Exception restartEx)
-            {
-                throw new InvalidOperationException($"下载引擎不可用且自动重启失败：{restartEx.Message}", restartEx);
-            }
-            try
-            {
-                var gids = await _client.AddUriBatchAsync(reqs, ct).ConfigureAwait(false);
-                _log("引擎重启后重试批量添加任务成功");
-                return gids;
-            }
-            catch (Exception retryEx)
-            {
-                throw new InvalidOperationException($"下载引擎不可用，重启后仍无法添加任务：{retryEx.Message}", retryEx);
-            }
-        }
-    }
+    private Task<List<string>> AddUriBatchWithGuardAsync(List<NewTaskRequest> reqs, CancellationToken ct)
+        => WithEngineGuardAsync("批量添加任务", c => _client.AddUriBatchAsync(reqs, c), ct);
 
     public async Task<DownloadTaskInfo> AddTaskAsync(NewTaskRequest req, CancellationToken ct = default)
     {
@@ -1030,7 +1099,19 @@ public sealed class DownloadEngine : IAsyncDisposable
             AddedAt = DateTime.Now
         });
         InvalidateSnapshot(); // 集合已变，判重/列表不应再用旧快照
-        var status = await _client.TellStatusAsync(gid, ct).ConfigureAwait(false);
+        // 磁力：登记存活校验。aria2 对"同 infohash 已注册"的 addUri 会收下 gid 后静默丢弃，
+        // 该 gid 在 tell* 里查无此人，只能靠轮询确认（见 ResolvePendingMagnetAdds）。
+        if (isMagnet)
+            TrackMagnetLiveness(gid,
+                req.Urls.First(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase)), taskNumber);
+        Aria2TaskStatus? status;
+        try { status = await _client.TellStatusAsync(gid, ct).ConfigureAwait(false); }
+        catch (Aria2RpcException) when (isMagnet)
+        {
+            // 已被静默丢弃：tellStatus 报 "No such download"。不在这里抛错，
+            // 让轮询的存活校验统一把它标成"同一磁力已在下载/做种中"，用户才看得到原因。
+            status = null;
+        }
         return status != null
             ? ToTaskInfo(status)
             : new DownloadTaskInfo { Gid = gid, TaskNumber = taskNumber, Name = req.FileName ?? req.Urls.First(), IsBt = isMagnet };
@@ -1133,6 +1214,9 @@ public sealed class DownloadEngine : IAsyncDisposable
                 Referer = list[i].Referer,
                 AddedAt = DateTime.Now
             });
+            // 与单任务路径一致：磁力登记存活校验（见 ResolvePendingMagnetAdds）
+            var magnetUrl = list[i].Urls.FirstOrDefault(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase));
+            if (magnetUrl != null) TrackMagnetLiveness(gids[i], magnetUrl, numbers[i]);
             results.Add(new DownloadTaskInfo { Gid = gids[i], TaskNumber = numbers[i], Name = list[i].FileName ?? list[i].Urls.First() });
         }
         InvalidateSnapshot();
@@ -1143,25 +1227,25 @@ public sealed class DownloadEngine : IAsyncDisposable
     // 不作废就会让"扩展刚发指令就立刻回查"拿到指令前的旧状态。
     public async Task PauseAsync(string gid, CancellationToken ct = default)
     {
-        await _client.PauseAsync(gid, ct).ConfigureAwait(false);
+        await WithEngineGuardAsync("暂停任务", c => _client.PauseAsync(gid, c), ct).ConfigureAwait(false);
         InvalidateSnapshot();
     }
 
     public async Task ResumeAsync(string gid, CancellationToken ct = default)
     {
-        await _client.UnpauseAsync(gid, ct).ConfigureAwait(false);
+        await WithEngineGuardAsync("继续任务", c => _client.UnpauseAsync(gid, c), ct).ConfigureAwait(false);
         InvalidateSnapshot();
     }
 
     public async Task PauseAllAsync(CancellationToken ct = default)
     {
-        await _client.PauseAllAsync(ct).ConfigureAwait(false);
+        await WithEngineGuardAsync("暂停全部任务", c => _client.PauseAllAsync(c), ct).ConfigureAwait(false);
         InvalidateSnapshot();
     }
 
     public async Task ResumeAllAsync(CancellationToken ct = default)
     {
-        await _client.UnpauseAllAsync(ct).ConfigureAwait(false);
+        await WithEngineGuardAsync("继续全部任务", c => _client.UnpauseAllAsync(c), ct).ConfigureAwait(false);
         InvalidateSnapshot();
     }
 
@@ -1195,7 +1279,7 @@ public sealed class DownloadEngine : IAsyncDisposable
         {
             if (status?.Status is "active" or "waiting" or "paused")
             {
-                await _client.RemoveAsync(gid, ct).ConfigureAwait(false);
+                await WithEngineGuardAsync("删除任务", c => _client.RemoveAsync(gid, c), ct).ConfigureAwait(false);
                 // aria2.remove 只把任务转入 stopped 结果（做种中的完成任务会残留为 complete），
                 // 稍候重试清除该结果，确保列表行消失；失败次数用尽则交由下次手动删除
                 for (var i = 0; i < 6; i++)
@@ -1203,16 +1287,22 @@ public sealed class DownloadEngine : IAsyncDisposable
                     try { await Task.Delay(250, ct).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
                     try
                     {
-                        await _client.RemoveDownloadResultAsync(gid, ct).ConfigureAwait(false);
+                        await WithEngineGuardAsync("清理任务结果", c => _client.RemoveDownloadResultAsync(gid, c), ct).ConfigureAwait(false);
                         break;
                     }
                     catch (Aria2RpcException) { /* 仍在转移为 stopped 结果，重试 */ }
+                    catch (Exception) { break; } // 引擎不可用（守卫已尝试重启）：不再重试，交由轮询看门狗
                 }
             }
             else
-                await _client.RemoveDownloadResultAsync(gid, ct).ConfigureAwait(false);
+                await WithEngineGuardAsync("清理任务结果", c => _client.RemoveDownloadResultAsync(gid, c), ct).ConfigureAwait(false);
         }
-        catch (Aria2RpcException) { /* 任务可能已消失 */ }
+        catch (Exception ex) when (ex is Aria2RpcException or InvalidOperationException)
+        {
+            // 任务可能已消失（Aria2RpcException），或引擎掉线且自愈重启也失败（InvalidOperationException）。
+            // 两种情况都不该挡住下面的本地清理：用户要的结果是"这一行消失"。
+            _log($"删除任务时引擎未成功执行（继续本地清理）: {ex.Message}");
+        }
 
         if (deleteFile)
         {
@@ -1242,9 +1332,25 @@ public sealed class DownloadEngine : IAsyncDisposable
     {
         // aria2 可能已经不认识这个 gid（失败结果被清、或重启后本地历史行）：
         // tellStatus 对未知 gid 是 RPC 错误而不是 null，必须接住再回落
-        DownloadTaskInfo? info = null;
+        DownloadTaskInfo? info;
         try { info = await GetTaskAsync(gid, ct).ConfigureAwait(false); }
         catch (Aria2RpcException) { info = null; }
+        catch (Exception ex) when (IsEngineUnreachable(ex) && !ct.IsCancellationRequested)
+        {
+            // 引擎掉线（传输层异常）：先自愈重启再读一次；仍读不到就回落本地历史。
+            // 真正的添加动作在末尾，由 AddTaskAsync 的守卫兜底。
+            try
+            {
+                await RestartEngineIfNeededAsync(ex.Message).ConfigureAwait(false);
+                try { info = await GetTaskAsync(gid, ct).ConfigureAwait(false); }
+                catch (Aria2RpcException) { info = null; }
+            }
+            catch (Exception restartEx)
+            {
+                _log($"重新下载前读取任务失败且引擎自愈未成功，回落本地历史：{restartEx.Message}");
+                info = null;
+            }
+        }
         info ??= HistoryFallback(gid);
         if (info == null) throw new InvalidOperationException($"任务 {gid} 不存在");
         if (info.Urls.Count == 0) throw new InvalidOperationException("任务没有可用的下载链接");
