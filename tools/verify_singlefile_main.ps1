@@ -31,7 +31,7 @@ public class WinProbe3 {
 }
 '@
 
-$dist = "D:\Project\kokonaDown\dist\KokonaSingleFile"
+$dist = Join-Path (Split-Path -Parent $PSScriptRoot) "dist\KokonaSingleFile"
 $exeName = "KokonaDownloader.exe"
 # 注意：/api/ping 是唯一免鉴权端点，这里不需要密钥。
 # 早期版本把用户真实的 ApiSecret 硬编码在此并随仓库推送（已移除）；
@@ -105,7 +105,7 @@ $resA = Probe-Launch -Path "$dirA\$exeName" -Workdir $dirA
 
 $ping = Test-Ping
 Write-Host ("ping: " + $ping)
-if ($null -ne $ping -and $ping -match '"version":"1\.0\.9"') { Write-Host "PASS: ping 200 version 1.0.9" } else { Write-Host "FAIL: ping missing or wrong version" }
+if ($null -ne $ping -and $ping -match '"version":"1\.1\.0"') { Write-Host "PASS: ping 200 version 1.1.0" } else { Write-Host "FAIL: ping missing or wrong version" }
 
 # exe 目录保持干净：除 exe 自己外不应有任何解压出来的文件
 $leftover = @(Get-ChildItem $dirA -Recurse -File | Where-Object { $_.Name -ne $exeName })
@@ -132,7 +132,7 @@ Write-Host "=== test B: dist dir (loose files present) ==="
 $resB = Probe-Launch -Path "$dist\$exeName" -Workdir $dist
 $pingB = Test-Ping
 Write-Host ("ping: " + $pingB)
-if ($null -ne $pingB -and $pingB -match '"version":"1\.0\.9"') { Write-Host "PASS: dist dir launch works, ping 200 v1.0.9" } else { Write-Host "FAIL: dist dir launch broken" }
+if ($null -ne $pingB -and $pingB -match '"version":"1\.1\.0"') { Write-Host "PASS: dist dir launch works, ping 200 v1.1.0" } else { Write-Host "FAIL: dist dir launch broken" }
 Stop-App
 
 Write-Host ""
