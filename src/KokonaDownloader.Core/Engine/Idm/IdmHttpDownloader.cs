@@ -454,25 +454,40 @@ _log = log;
         Exception? lastError = null;
         for (int attempt = 0; attempt < Math.Max(1, _urls.Count); attempt++)
         {
-            using var probe = BuildRequest(opts, CurrentUrl, null, useRange: false);
             try
             {
-                resp = await _http.SendAsync(probe, HttpCompletionOption.ResponseHeadersRead, ct)
-                    .ConfigureAwait(false);
-
-                // 403 且带了自定义 UA：换回内置 UA 再试一次。
-                // 有些站点的反爬规则恰好拒绝浏览器 UA（镜像站常见），而下载器默认 UA 是放行的。
-                if (resp.StatusCode == HttpStatusCode.Forbidden && !_dropUserAgent && HasUserAgentHeader(opts))
+                // 临时 5xx 必须重试：CDN 限流、边缘节点抖动都是常态，一次 503 就判失败
+                // 会让用户看到"下载失败"却什么也没发生（aria2 路径有 --max-tries=5，
+                // 换成自研引擎后这段能力没跟过来，属于能力回退）。
+                for (int retry = 0; ; retry++)
                 {
-                    _log?.Invoke("[idm] 403：去掉自定义 User-Agent 重试一次");
-                    _dropUserAgent = true;
-                    resp.Dispose();
-                    using var retry = BuildRequest(opts, CurrentUrl, null, useRange: false);
-                    resp = await _http.SendAsync(retry, HttpCompletionOption.ResponseHeadersRead, ct)
+                    using var probe = BuildRequest(opts, CurrentUrl, null, useRange: false);
+                    resp = await _http.SendAsync(probe, HttpCompletionOption.ResponseHeadersRead, ct)
                         .ConfigureAwait(false);
+
+                    // 403 且带了自定义 UA：换回内置 UA 再试一次。
+                    // 有些站点的反爬规则恰好拒绝浏览器 UA（镜像站常见），而下载器默认 UA 是放行的。
+                    if (resp.StatusCode == HttpStatusCode.Forbidden && !_dropUserAgent && HasUserAgentHeader(opts))
+                    {
+                        _log?.Invoke("[idm] 403：去掉自定义 User-Agent 重试一次");
+                        _dropUserAgent = true;
+                        resp.Dispose();
+                        using var retryReq = BuildRequest(opts, CurrentUrl, null, useRange: false);
+                        resp = await _http.SendAsync(retryReq, HttpCompletionOption.ResponseHeadersRead, ct)
+                            .ConfigureAwait(false);
+                    }
+
+                    if (!IsTransientStatus(resp.StatusCode) || retry >= MaxProbeRetries - 1)
+                        break;
+
+                    TimeSpan wait = RetryDelayOf(resp, retry);
+                    _log?.Invoke($"[idm] 探测收到 {(int)resp.StatusCode}，{wait.TotalMilliseconds:0} ms 后重试（第 {retry + 1} 次）");
+                    resp.Dispose();
+                    resp = null;
+                    await Task.Delay(wait, ct).ConfigureAwait(false);
                 }
 
-                resp.EnsureSuccessStatusCode();
+                resp!.EnsureSuccessStatusCode();
                 break;
             }
             catch (OperationCanceledException) { throw; }
@@ -514,6 +529,30 @@ _log = log;
             }
 
             EnsureFreeSpace(opts.Directory, total);
+
+            // 声明了 Accept-Ranges 不等于真的兑现 Range。实测有服务器对区间请求回整份 200，
+            // 此时每条 worker 都会各自"整份读取 + 跳过前缀"，文件虽然正确但下载量翻倍（实测 2.02x）。
+            // 用一个 1 字节的区间请求确认真实能力：不兑现就找能兑现的镜像，都没有才退回单连接。
+            if (_ranges && opts.MaxConnections > 1 && total >= opts.MinSplitSize * 2
+                && !await VerifyRangeAsync(opts, ct))
+            {
+                string? capable = await FindRangeCapableMirrorAsync(opts, ct).ConfigureAwait(false);
+                if (capable is not null)
+                {
+                    // 把能兑现 Range 的镜像排到最前：分段连接从它开始试，
+                    // 不必每条都先撞一遍主地址那份"整份 200"。
+                    var reordered = new List<string> { capable };
+                    reordered.AddRange(_urls.Where(u => !string.Equals(u, capable, StringComparison.OrdinalIgnoreCase)));
+                    _urls = reordered;
+                    _mirror = 0;
+                    _log?.Invoke($"[idm] 主地址忽略 Range，分段改走镜像: {capable}");
+                }
+                else
+                {
+                    _ranges = false;
+                    _log?.Invoke("[idm] 服务器声明 Accept-Ranges 但忽略 Range 请求，改为单连接顺序下载");
+                }
+            }
 
             _chunks.Initialize(total);
             PreparePartFile(_handle!, total, opts.SparsePreallocation);
@@ -830,9 +869,12 @@ _log = log;
                     continue;
                 }
 
-                _ranges = false;
+                // 只有 200 才能得出"这个服务器忽略 Range"的结论。
+                // 503/403/404 这类是临时或权限问题：把它们也当成"不支持分段"，会让整个任务
+                // 从此不再切分（一次 5xx 就把多连接降级成单连接，且不会自愈）。
                 if (resp.StatusCode == HttpStatusCode.OK)
                 {
+                    _ranges = false;
                     // 服务器支持 Range 是运气，不支持也不该下不完：读整份、丢掉前缀、从本段起点写
                     await using var body = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
                     await SkipAsync(body, start, ct).ConfigureAwait(false);
@@ -1300,6 +1342,84 @@ _log = log;
     }
 
     private static int MaxRetriesOf(IdmDownloadOptions opts) => opts.MaxRetries > 0 ? opts.MaxRetries : 12;
+
+    /// <summary>
+    /// 探测阶段遇到临时错误时的总尝试次数（含首次）。
+    /// 对齐 aria2 的 <c>--max-tries=5</c> 语义但更克制：4 次、退避合计最多 3.5 秒，
+    /// 既能扛过 CDN 边缘节点"抖三下"的情况，也不会让死掉的地址把用户拖住十几秒。
+    /// </summary>
+    private const int MaxProbeRetries = 4;
+
+    /// <summary>临时性错误：值得退避重试；404/401/403 这类是永久错误，重试只会浪费用户时间。</summary>
+    private static bool IsTransientStatus(HttpStatusCode code) => code is
+        HttpStatusCode.RequestTimeout or
+        HttpStatusCode.TooManyRequests or
+        HttpStatusCode.InternalServerError or
+        HttpStatusCode.BadGateway or
+        HttpStatusCode.ServiceUnavailable or
+        HttpStatusCode.GatewayTimeout;
+
+    /// <summary>优先服从服务端 Retry-After（上限 10 秒），否则 500ms 起步指数退避、封顶 4 秒。</summary>
+    private static TimeSpan RetryDelayOf(HttpResponseMessage resp, int retry)
+    {
+        var ra = resp.Headers.RetryAfter;
+        if (ra?.Delta is { } delta && delta > TimeSpan.Zero && delta <= TimeSpan.FromSeconds(10))
+            return delta;
+        if (ra?.Date is { } at)
+        {
+            var wait = at - DateTimeOffset.UtcNow;
+            if (wait > TimeSpan.Zero && wait <= TimeSpan.FromSeconds(10)) return wait;
+        }
+        return TimeSpan.FromMilliseconds(Math.Min(4000, 500 * (1 << Math.Min(retry, 3))));
+    }
+
+    /// <summary>
+    /// 用 <c>Range: bytes=0-0</c> 确认服务器是否真的兑现区间请求。
+    /// 只认 206：200（忽略 Range 回整份）和 416（拒绝区间）都会让"整份读取 + 跳过前缀"
+    /// 的分段退化路径产生重复传输，不如一开始就单连接。
+    /// 其他状态码/异常保持保守——不能因为一次探测失败就放弃多连接。
+    /// </summary>
+    private async Task<bool> VerifyRangeAsync(IdmDownloadOptions opts, CancellationToken ct)
+    {
+        try
+        {
+            using var req = BuildRequest(opts, CurrentUrl, (0, 0), useRange: true);
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct)
+                .ConfigureAwait(false);
+            if (resp.StatusCode == HttpStatusCode.PartialContent) return true;
+            if (resp.StatusCode is HttpStatusCode.OK or HttpStatusCode.RequestedRangeNotSatisfiable)
+                return false;
+            return !IsTransientStatus(resp.StatusCode);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _log?.Invoke($"[idm] Range 能力校验失败，按服务器声明的能力继续: {ex.Message}");
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// 主地址不兑现 Range 时，找一个真正回 206 的镜像，让分段连接改走它。
+    /// 主地址仍会作为兜底留在列表里（镜像全挂时靠它的"整份 200"也能下完）。
+    /// </summary>
+    private async Task<string?> FindRangeCapableMirrorAsync(IdmDownloadOptions opts, CancellationToken ct)
+    {
+        foreach (string url in _urls)
+        {
+            if (string.Equals(url, CurrentUrl, StringComparison.OrdinalIgnoreCase)) continue;
+            try
+            {
+                using var req = BuildRequest(opts, url, (0, 0), useRange: true);
+                using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct)
+                    .ConfigureAwait(false);
+                if (resp.StatusCode == HttpStatusCode.PartialContent) return url;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch { /* 单个镜像探测失败不影响其它候选 */ }
+        }
+        return null;
+    }
 
     private static bool HasUserAgentHeader(IdmDownloadOptions opts)
         => opts.Headers?.Any(h => h.TrimStart().StartsWith("User-Agent:", StringComparison.OrdinalIgnoreCase)) == true;

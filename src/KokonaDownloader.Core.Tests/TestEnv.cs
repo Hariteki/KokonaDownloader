@@ -128,6 +128,16 @@ internal static class TestEnv
         /// <summary>把 path 配置为 302 重定向到 location（通常是另一个 Url(...)）。</summary>
         public void AddRedirect(string path, string location) => _redirects[path.TrimStart('/')] = location;
 
+        /// <summary>
+        /// 该路径的前 <paramref name="times"/> 次请求直接返回 <paramref name="status"/>，
+        /// 之后恢复正常。用来复现"CDN 限流 / 边缘节点抖动"——503 是暂时的，
+        /// 一次就判失败会让用户看到"下载失败"却什么也没发生。
+        /// </summary>
+        public void FailFirstRequests(string path, int times, int status)
+            => _failFirst[path.TrimStart('/')] = (times, status);
+
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (int Times, int Status)> _failFirst = new();
+
         /// <summary>每条请求的请求头快照（断言"扩展传来的 Cookie/UA 真的发出去了"）。</summary>
         public readonly System.Collections.Concurrent.ConcurrentQueue<Dictionary<string, string>> RequestHeaders = new();
 
@@ -155,6 +165,15 @@ internal static class TestEnv
             {
                 var path = ctx.Request.Url!.AbsolutePath.TrimStart('/');
                 _requestCounts.AddOrUpdate(path, 1, (_, n) => n + 1);
+
+                // 先处理"前 N 次故意失败"：连重定向/文件都不查，模拟真正的临时故障
+                if (_failFirst.TryGetValue(path, out var fail) && fail.Times > 0)
+                {
+                    _failFirst[path] = (fail.Times - 1, fail.Status);
+                    ctx.Response.StatusCode = fail.Status;
+                    ctx.Response.Close();
+                    return;
+                }
 
                 var snapshot = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 foreach (string? key in ctx.Request.Headers.AllKeys)

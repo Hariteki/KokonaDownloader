@@ -107,6 +107,99 @@ public sealed class IdmRobustnessTests
     }
 
     [Fact]
+    public async Task Transient503OnProbe_IsRetriedInsteadOfFailingImmediately()
+    {
+        string workDir = TestEnv.NewWorkDir();
+        string dl = Path.Combine(workDir, "dl");
+        string parts = Path.Combine(workDir, "parts");
+        Directory.CreateDirectory(dl);
+
+        var payload = Payload(256 * 1024);
+        using var server = new TestEnv.FileServer();
+        server.AddFile("flaky.bin", payload);
+        // CDN 限流 / 边缘节点抖动：前三次 503，第四次正常。
+        // 换引擎前这里是"一次性失败"——用户看到下载失败，但重试一下就好了。
+        server.FailFirstRequests("flaky.bin", 3, 503);
+
+        await using var downloader = new IdmHttpDownloader();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(40));
+        var opts = new IdmDownloadOptions
+        {
+            Url = server.Url("flaky.bin"),
+            Directory = dl,
+            PartsDirectory = parts,
+            PartKey = "flaky-1",
+            MaxConnections = 4,
+        };
+
+        var result = await downloader.DownloadAsync(opts, null, cts.Token);
+
+        Assert.Equal(payload, await File.ReadAllBytesAsync(result.FilePath!));
+        Assert.True(server.RequestCountFor("flaky.bin") >= 3,
+            $"应该重试过 503，实际只发了 {server.RequestCountFor("flaky.bin")} 次请求");
+    }
+
+    [Fact]
+    public async Task Permanent404_IsNotRetried()
+    {
+        string workDir = TestEnv.NewWorkDir();
+        string dl = Path.Combine(workDir, "dl");
+        string parts = Path.Combine(workDir, "parts");
+        Directory.CreateDirectory(dl);
+
+        using var server = new TestEnv.FileServer();
+        await using var downloader = new IdmHttpDownloader();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var opts = new IdmDownloadOptions
+        {
+            Url = server.Url("missing.bin"),   // 服务端没有这个文件 → 404
+            Directory = dl,
+            PartsDirectory = parts,
+            PartKey = "404-1",
+        };
+
+        await Assert.ThrowsAnyAsync<Exception>(() => downloader.DownloadAsync(opts, null, cts.Token));
+
+        // 404 是永久错误：重试只会白等（aria2 的语义也是只请求一次）
+        Assert.Equal(1, server.RequestCountFor("missing.bin"));
+    }
+
+    [Fact]
+    public async Task ServerAdvertisesRangeButIgnoresIt_FallsBackToSingleConnection()
+    {
+        string workDir = TestEnv.NewWorkDir();
+        string dl = Path.Combine(workDir, "dl");
+        string parts = Path.Combine(workDir, "parts");
+        Directory.CreateDirectory(dl);
+
+        var payload = Payload(4 * 1024 * 1024);
+        using var server = new TestEnv.FileServer();
+        // 声明 Accept-Ranges: bytes，但对任何 Range 请求都回整份 200（"撒谎"服务器）。
+        // 旧行为：8 条 worker 各自整份读取 + 丢弃前缀，文件正确但实测下载量 2.02x。
+        server.AddFile("lying.bin", payload, ignoreRange: true, chunkBytes: 32 * 1024, chunkDelayMs: 1);
+
+        await using var downloader = new IdmHttpDownloader();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        var opts = new IdmDownloadOptions
+        {
+            Url = server.Url("lying.bin"),
+            Directory = dl,
+            PartsDirectory = parts,
+            PartKey = "lying-1",
+            MaxConnections = 8,
+        };
+
+        var result = await downloader.DownloadAsync(opts, null, cts.Token);
+
+        Assert.Equal(payload, await File.ReadAllBytesAsync(result.FilePath!));
+        // 关键信号：Range 只出现在那一次能力校验里。若仍按多连接跑，每条 worker
+        // 都会发自己的 Range 请求，这里有 8 条连接就会看到 8+ 次。
+        Assert.Equal(1, server.RangeRequestCount);
+        // 校验请求是被中途丢弃的，服务端可能还没收尾，允许与主连接短暂重叠
+        Assert.True(server.MaxConcurrent <= 2, $"实际开了 {server.MaxConcurrent} 条并发连接");
+    }
+
+    [Fact]
     public async Task WindowsReservedName_IsPrefixed_SoFileCanBeCreated()
     {
         string workDir = TestEnv.NewWorkDir();
