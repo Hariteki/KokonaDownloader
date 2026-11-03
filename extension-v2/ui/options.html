@@ -40,8 +40,11 @@
         <input id="port" type="number" min="1" max="65535" placeholder="16800">
       </div>
     </div>
-    <label for="secret">连接密钥</label>
-    <input id="secret" type="password" placeholder="客户端「设置 → 浏览器扩展连接」复制">
+    <label>连接密钥</label>
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap">
+      <button id="paste" class="primary">粘贴密钥并连接</button>
+      <span id="secretState" class="desc">读取中…</span>
+    </div>
     <div class="switch">
       <input id="autoCapture" type="checkbox">
       <label for="autoCapture" style="margin:0">自动接管浏览器下载</label>

@@ -38,7 +38,7 @@ node tools/pack_extension.mjs --for-store
 
 1. 启动海兔客户端
 2. 客户端「设置 → 浏览器扩展连接」里复制密钥
-3. 点工具栏的海兔图标 → 粘贴密钥 → 「保存并验证」
+3. 点工具栏的海兔图标 → 点「粘贴密钥并连接」（扩展直接读剪贴板，不需要手动粘贴）
 4. 状态点变绿即成功
 
 可选但强烈建议：点「授权访问网站（用于带上登录 Cookie）」。
@@ -72,6 +72,7 @@ node tools/pack_extension.mjs --for-store
 | `downloads` | 接住浏览器下载、失败时保留原生下载 |
 | `contextMenus` | 右键「使用海兔下载器下载」「下载本页所有链接」 |
 | `storage` | 保存客户端地址与密钥；会话起点用于挡历史回放 |
+| `clipboardRead` | 「粘贴密钥并连接」按钮读取剪贴板里的密钥 |
 | `scripting` + `activeTab` | 「下载本页所有链接」按需注入，不常驻 content script |
 | `cookies` | 采集会话 Cookie，让需要登录的下载能成功 |
 | `notifications` | 转发失败、客户端未运行等提示 |
