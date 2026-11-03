@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>欢迎使用海兔下载器</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; padding: 48px 24px; font: 15px/1.7 "Segoe UI", system-ui, sans-serif;
+      background: #1b1b1b; color: #e8e8e8;
+    }
+    main { max-width: 640px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    .lead { color: #a8a8a8; margin-bottom: 24px; }
+    ol { padding-left: 20px; }
+    li { margin: 10px 0; }
+    code {
+      background: #2b2b2b; border: 1px solid #3a3a3a; border-radius: 4px;
+      padding: 1px 6px; font-size: 13px;
+    }
+    .card { background: #242424; border: 1px solid #333; border-radius: 10px; padding: 18px; margin-top: 20px; }
+    button {
+      margin-top: 12px; padding: 9px 18px; border-radius: 6px; cursor: pointer;
+      border: 1px solid #2f6fd0; background: #2f6fd0; color: #fff; font: inherit;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>扩展已安装</h1>
+    <div class="lead">还需要两步，才能把浏览器下载交给海兔下载器。</div>
+
+    <ol>
+      <li>打开海兔下载器桌面端，进入 <code>设置 → 浏览器扩展连接</code>，复制其中的连接密钥。</li>
+      <li>点击下面的按钮打开扩展弹窗，粘贴密钥并点「保存并验证」。</li>
+      <li>（建议）在弹窗里点「授权访问网站」，这样需要登录的下载也能成功。</li>
+    </ol>
+
+    <div class="card">
+      <strong>注意</strong>
+      <div class="lead" style="margin:8px 0 0">
+        如果你之前装过旧版「海兔下载器」扩展，请先在 <code>edge://extensions</code> 里停用它，
+        否则两个扩展会同时接管下载，出现重复任务。
+      </div>
+    </div>
+
+    <button id="openPopup">打开扩展弹窗</button>
+  </main>
+  <script type="module">
+    document.getElementById('openPopup').addEventListener('click', () => {
+      // MV3 无法用代码直接打开 popup，这里提示用户点工具栏图标
+      alert('请点击浏览器工具栏上的海兔图标，粘贴密钥完成配对。');
+    });
+  </script>
+</body>
+</html>

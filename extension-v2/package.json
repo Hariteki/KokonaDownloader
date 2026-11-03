@@ -1,0 +1,9 @@
+{
+  "name": "kokona-extension-v2",
+  "private": true,
+  "type": "module",
+  "description": "仅用于让 Node 以 ESM 方式运行 lib/ 与测试；扩展本身不需要这个文件。",
+  "scripts": {
+    "test": "node --test test/logic.test.mjs test/force-attachment.test.mjs test/sw.test.mjs"
+  }
+}

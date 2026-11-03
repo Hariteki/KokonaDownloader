@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>海兔下载器 · 设置</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; padding: 24px; max-width: 620px;
+      font: 14px/1.6 "Segoe UI", system-ui, sans-serif;
+      background: #1b1b1b; color: #e8e8e8;
+    }
+    h1 { font-size: 18px; margin: 0 0 18px; }
+    .card { background: #242424; border: 1px solid #333; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+    label { display: block; font-size: 12px; color: #a8a8a8; margin: 8px 0 4px; }
+    input[type=text], input[type=password], input[type=number] {
+      width: 100%; box-sizing: border-box; padding: 7px 9px; border-radius: 6px;
+      border: 1px solid #3a3a3a; background: #2b2b2b; color: #eee; font: inherit;
+    }
+    .grid { display: grid; grid-template-columns: 1fr 120px; gap: 10px; }
+    .switch { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+    .switch input { width: 16px; height: 16px; }
+    .desc { font-size: 12px; color: #8f8f8f; }
+    button { padding: 8px 16px; border-radius: 6px; border: 1px solid #3a3a3a; background: #333; color: #eee; cursor: pointer; font: inherit; }
+    button.primary { background: #2f6fd0; border-color: #2f6fd0; }
+    .hint { font-size: 12px; color: #7fbf8f; margin-left: 8px; }
+  </style>
+</head>
+<body>
+  <h1>海兔下载器 · 扩展设置</h1>
+
+  <div class="card">
+    <div class="grid">
+      <div>
+        <label for="host">客户端地址</label>
+        <input id="host" type="text" placeholder="127.0.0.1">
+      </div>
+      <div>
+        <label for="port">端口</label>
+        <input id="port" type="number" min="1" max="65535" placeholder="16800">
+      </div>
+    </div>
+    <label for="secret">连接密钥</label>
+    <input id="secret" type="password" placeholder="客户端「设置 → 浏览器扩展连接」复制">
+    <div class="switch">
+      <input id="autoCapture" type="checkbox">
+      <label for="autoCapture" style="margin:0">自动接管浏览器下载</label>
+    </div>
+    <div class="desc" id="interceptHint">以客户端设置为准：客户端关闭「浏览器扩展自动拦截下载」时，这里也不会接管。</div>
+    <div style="margin-top:14px">
+      <button id="save" class="primary">保存</button>
+      <span id="hint" class="hint"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="switch">
+      <input id="forceAttachment" type="checkbox">
+      <label for="forceAttachment" style="margin:0">把网页内联文件改为下载（实验）</label>
+    </div>
+    <div class="desc">
+      部分链接（如 PDF、压缩包）浏览器会直接预览而不是下载，扩展因此拿不到。
+      打开后扩展会按扩展名把这类响应标记为附件，从而交给海兔下载。
+      副作用：这些类型的站点内联预览会变成下载。
+    </div>
+    <div class="desc" id="forceHint" style="margin-top:6px"></div>
+  </div>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0; width: 320px; padding: 14px;
+      font: 13px/1.5 "Segoe UI", system-ui, sans-serif;
+      background: #202020; color: #e8e8e8;
+    }
+    h1 { margin: 0 0 10px; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #8a8a8a; }
+    .dot.on { background: #4cc27a; } .dot.err { background: #e05a4f; }
+    .row { margin: 10px 0; }
+    label { display: block; font-size: 12px; color: #a8a8a8; margin-bottom: 4px; }
+    input {
+      width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 6px;
+      border: 1px solid #3a3a3a; background: #2b2b2b; color: #eee; font: inherit;
+    }
+    button {
+      width: 100%; padding: 7px 10px; margin-top: 6px; border-radius: 6px; cursor: pointer;
+      border: 1px solid #3a3a3a; background: #333; color: #eee; font: inherit;
+    }
+    button.primary { background: #2f6fd0; border-color: #2f6fd0; }
+    button:disabled { opacity: .5; cursor: default; }
+    .hint { font-size: 11px; color: #8f8f8f; margin-top: 6px; }
+    .status { font-size: 12px; color: #a8a8a8; }
+    .link { font-size: 12px; color: #6ea8fe; cursor: pointer; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <h1><span id="dot" class="dot"></span>海兔下载器</h1>
+  <div class="status" id="status">正在检测…</div>
+
+  <div class="row">
+    <label for="secret">连接密钥（客户端「设置 → 浏览器扩展连接」里复制）</label>
+    <input id="secret" type="password" placeholder="粘贴密钥" autocomplete="off">
+    <button id="save" class="primary">保存并验证</button>
+  </div>
+
+  <div class="status" id="intercept" style="margin-top:6px"></div>
+
+  <div class="row">
+    <button id="grant">授权访问网站（用于带上登录 Cookie）</button>
+    <div class="hint" id="grantHint"></div>
+  </div>
+
+  <div class="row">
+    <a class="link" id="options">更多设置</a>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
