@@ -25,6 +25,11 @@ public sealed class AppSettings
     public bool MinimizeToTrayOnClose { get; set; } = true;
     /// <summary>扩展捕获下载后是否自动拦截浏览器原生下载。</summary>
     public bool InterceptBrowserDownloads { get; set; } = true;
+    /// <summary>
+    /// HTTPS 上是否尝试 HTTP/2（默认关，需重启引擎生效）。
+    /// h2 走单连接多路复用，与"多连接并行"的取舍见 EngineConfig.Http2Enabled 注释。
+    /// </summary>
+    public bool Http2Enabled { get; set; }
 
     // ---- BitTorrent / 磁力 ----
     /// <summary>是否启用 BT/磁力下载支持（需重启引擎生效）。</summary>
@@ -109,6 +114,11 @@ public static class AppPaths
     public static string TasksFile => Path.Combine(DataDir, "tasks.json");
     public static string NotifiedFile => Path.Combine(DataDir, "notified.json");
     public static string EngineWorkDir => Path.Combine(DataDir, "engine");
+    /// <summary>
+    /// IDM 协议引擎的断点存储（.kdpart + 状态文件）。放应用数据目录而不是下载目录，
+    /// 用户在下完之前只该看到"还没出现的目标文件"，不该看到一堆中间文件。
+    /// </summary>
+    public static string PartsDir => Path.Combine(DataDir, "parts");
     public static string LogFile => Path.Combine(DataDir, "app.log");
     /// <summary>BT tracker 列表缓存（自动更新用）。</summary>
     public static string TrackersFile => Path.Combine(DataDir, "trackers.json");

@@ -342,7 +342,7 @@ public sealed class ApiService : IDisposable
         }
 
         // 任务操作 /api/tasks/{gid}/{action}
-        var m = System.Text.RegularExpressions.Regex.Match(path, @"^/api/tasks/([0-9a-fA-F]+)/(pause|resume|remove|redownload)$");
+        var m = System.Text.RegularExpressions.Regex.Match(path, @"^/api/tasks/([0-9a-fA-F]+|idm-[0-9]+)/(pause|resume|remove|redownload)$");
         if (m.Success && req.HttpMethod == "POST")
         {
             await HandleTaskAction(ctx, m.Groups[1].Value, m.Groups[2].Value).ConfigureAwait(false);

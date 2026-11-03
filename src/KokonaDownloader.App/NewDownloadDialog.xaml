@@ -16,6 +16,10 @@
             <TextBox x:Name="UrlBox" Style="{ThemeResource SquircleTextBoxStyle}"
                      AcceptsReturn="True" TextWrapping="Wrap" Height="96"
                      PlaceholderText="https://example.com/file.zip&#x0a;magnet:?xt=urn:btih:…"/>
+            <!-- 多行默认是"多个任务"；勾上才当成同一文件的镜像地址，合成一个任务。
+                 常显而不是按行数显隐：用户需要先知道有这个选项，隐藏式的开关很难被发现。 -->
+            <CheckBox x:Name="MirrorToggle"
+                      Content="以上多行是同一个文件的镜像地址（合并成一个任务，主地址失败自动切换）"/>
             <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                 <Button Content="选择 .torrent 文件…" Click="OnBrowseTorrent"/>
                 <TextBlock x:Name="TorrentFileText" VerticalAlignment="Center" FontSize="12"

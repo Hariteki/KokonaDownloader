@@ -31,6 +31,7 @@ public sealed partial class SettingsWindow : Window
         InterceptSwitch.IsOn = s.InterceptBrowserDownloads;
         MinimizeSwitch.IsOn = s.MinimizeToTrayOnClose;
         StartupSwitch.IsOn = StartupHelper.IsEnabled();
+        Http2Switch.IsOn = s.Http2Enabled;
         ApiAddressText.Text = $"http://127.0.0.1:{s.ApiPort}";
         SecretText.Text = s.ApiSecret;
 
@@ -127,7 +128,8 @@ public sealed partial class SettingsWindow : Window
                 || s.NotificationsEnabled != NotifySwitch.IsOn
                 || s.InterceptBrowserDownloads != InterceptSwitch.IsOn
                 || s.MinimizeToTrayOnClose != MinimizeSwitch.IsOn
-                || s.LaunchAtStartup != StartupSwitch.IsOn;
+                || s.LaunchAtStartup != StartupSwitch.IsOn
+                || s.Http2Enabled != Http2Switch.IsOn;
 
             s.DefaultDownloadDir = dir;
             s.MaxConcurrentDownloads = (int)MaxConcBox.Value;
@@ -137,6 +139,7 @@ public sealed partial class SettingsWindow : Window
             s.InterceptBrowserDownloads = InterceptSwitch.IsOn;
             s.MinimizeToTrayOnClose = MinimizeSwitch.IsOn;
             s.LaunchAtStartup = StartupSwitch.IsOn;
+            s.Http2Enabled = Http2Switch.IsOn;
             return changed;
         });
         // 注册表立即生效

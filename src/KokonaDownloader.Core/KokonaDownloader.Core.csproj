@@ -6,4 +6,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- 只为让测试直接验证内部工具方法（磁盘预检、长路径前缀），不必把它们变成公开 API -->
+    <InternalsVisibleTo Include="KokonaDownloader.Core.Tests" />
+  </ItemGroup>
+
 </Project>

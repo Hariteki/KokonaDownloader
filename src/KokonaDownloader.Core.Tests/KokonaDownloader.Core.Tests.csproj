@@ -9,6 +9,11 @@
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
 
+  <!-- 只为 HTTP/2 验收：起一个真实的 Kestrel（h2c），证明协商与多路复用确实发生 -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />

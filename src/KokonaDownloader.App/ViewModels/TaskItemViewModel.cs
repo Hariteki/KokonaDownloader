@@ -166,6 +166,9 @@ public sealed class TaskItemViewModel : INotifyPropertyChanged
             : FormatSize(info.CompletedLength);
         StatusText = State switch
         {
+            // 服务器没给 Content-Length 时进度恒为 0，写"下载中 0%"会让人以为卡住了
+            TaskState.Active when info.TotalLength <= 0 => $"下载中 · 已下载 {FormatSize(info.CompletedLength)}",
+            TaskState.Paused when info.TotalLength <= 0 => "已暂停",
             TaskState.Active when info.IsBt && info.NumSeeders > 0 => $"下载中 {Progress:0.#}% · 连接种子 {info.NumSeeders}",
             TaskState.Active => $"下载中 {Progress:0.#}%",
             TaskState.Waiting => "排队中",

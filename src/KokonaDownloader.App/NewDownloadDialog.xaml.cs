@@ -96,7 +96,10 @@ public partial class NewDownloadDialog : ContentDialog
                 return;
             }
 
-            var urls = UrlBox.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            // 必须同时按 \r 和 \n 切：WinUI 的 TextBox 把换行存成 '\r'（粘贴 \r\n 会被归一化），
+            // 只按 '\n' 切会把整个地址栏当成一个 URL——多行输入会被静默合并成一条（老 bug）。
+            var urls = UrlBox.Text
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Where(u => u.Length > 0).Distinct().ToList();
             if (urls.Count == 0)
             {
@@ -126,6 +129,7 @@ public partial class NewDownloadDialog : ContentDialog
 
             var magnets = urls.Where(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase)).ToList();
             var normal = urls.Except(magnets).ToList();
+            App.Log($"[dialog] 解析 urls={urls.Count} normal={normal.Count} mirrors={MirrorToggle.IsChecked}");
 
             // 重复预检：相同链接仍在下载中/排队/暂停时弹窗提醒并跳过，不重复添加；
             // 已完成/失败的历史任务不算重复（用户可能已删除文件，需要再次下载）
@@ -155,16 +159,35 @@ public partial class NewDownloadDialog : ContentDialog
                 });
             }
 
-            if (normal.Count == 1)
+            // 镜像模式：多行 = 同一个文件的多个地址，合成一个任务（主地址失败自动切换）
+            bool asMirrors = MirrorToggle.IsChecked == true && normal.Count > 1;
+            if (MirrorToggle.IsChecked == true && normal.Count < 2)
+            {
+                ShowError("勾选了镜像模式，请至少填两个下载地址（每行一个）");
+                return;
+            }
+            if (asMirrors &&
+                normal.Select(u => u.StartsWith("ftp://", StringComparison.OrdinalIgnoreCase) ? "ftp" : "http")
+                      .Distinct().Count() > 1)
+            {
+                // 引擎只接受与主地址同协议的镜像（HTTP 与 FTP 的续传语义不同），混用会被静默丢掉
+                ShowError("镜像地址的协议必须一致：不能把 HTTP 与 FTP 地址混在一起");
+                return;
+            }
+
+            if (asMirrors || normal.Count == 1)
             {
                 await _host.Engine.AddTaskAsync(new NewTaskRequest
                 {
-                    Urls = normal,
+                    Urls = normal,          // 1 个地址，或 N 个镜像地址
                     Directory = dir,
                     FileName = string.IsNullOrWhiteSpace(FileNameBox.Text) ? null : FileNameBox.Text.Trim(),
                     Connections = (int)ConnBox.Value,
                     SpeedLimit = limit
                 });
+                App.Log(asMirrors
+                    ? $"[dialog] 镜像任务 {normal.Count} 个地址 → 单任务"
+                    : "[dialog] 单地址任务");
             }
             else if (normal.Count > 1)
             {

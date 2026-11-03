@@ -61,7 +61,38 @@ public sealed class Aria2RpcClient : IDisposable
     /// </summary>
     private async Task<JsonDocument> PostForDocumentAsync(JsonObject payload, CancellationToken ct)
     {
-        using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+        string json = payload.ToJsonString();
+        try
+        {
+            return await SendOnceAsync(json, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsTransientEndpointFailure(ex) && !ct.IsCancellationRequested)
+        {
+            // aria2 的 JSON-RPC 对 `POST /jsonrpc` 不会回 404，连接错误也不该出现在"刚 ping 通"之后：
+            // 拿到这些说明**这一刻端口上应答的不是我们的 aria2**（进程刚重启、端口被短暂占用）。
+            // 全量测试里偶发过一次 HTTP 404（空响应体，aria2 的典型回法），一次重试即可过去；
+            // 真故障会再抛一次，不会被吞掉。
+            _logTransient?.Invoke($"[aria2] RPC 瞬时失败，重试一次: {ex.Message}");
+            await Task.Delay(150, ct).ConfigureAwait(false);
+            return await SendOnceAsync(json, ct).ConfigureAwait(false);
+        }
+    }
+
+    private static bool IsTransientEndpointFailure(Exception ex) => ex switch
+    {
+        Aria2RpcException rpc => rpc.Code is 404 or 502 or 503,
+        HttpRequestException => true,
+        System.Net.Sockets.SocketException => true,
+        IOException => true,
+        _ => false,
+    };
+
+    /// <summary>诊断钩子（引擎接上它写 app.log 用的），为空时静默。</summary>
+    internal Action<string>? _logTransient;
+
+    private async Task<JsonDocument> SendOnceAsync(string json, CancellationToken ct)
+    {
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
         var resp = await _http.PostAsync(_endpoint, content, ct).ConfigureAwait(false);
         try
         {

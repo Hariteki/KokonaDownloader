@@ -60,6 +60,12 @@ public sealed class AppHost : IAsyncDisposable
         var s = Settings.Current;
         return new EngineConfig
         {
+            // 海兔：HTTP/HTTPS/FTP 走 IDM 分段协议引擎；BT/磁力仍由 aria2 负责。
+            // KOKONA_FORCE_ARIA2=1 是**仅供测试/对比**的逃生口：让 HTTP 回到 aria2 路径，
+            // 用于与 IDM 路径做 A/B 截图比对（见 plans/ 里的 UI 一致性验收）。不得作为发布开关。
+            UseIdmProtocol = !string.Equals(
+                Environment.GetEnvironmentVariable("KOKONA_FORCE_ARIA2"), "1",
+                StringComparison.Ordinal),
             Aria2Path = _aria2Path,
             WorkDir = AppPaths.EngineWorkDir,
             DefaultDownloadDir = s.DefaultDownloadDir,
@@ -67,6 +73,7 @@ public sealed class AppHost : IAsyncDisposable
             RpcSecret = s.ApiSecret,
             MaxConcurrentDownloads = s.MaxConcurrentDownloads,
             DefaultConnections = s.DefaultConnections,
+            Http2Enabled = s.Http2Enabled,
             GlobalSpeedLimit = s.GlobalSpeedLimit,
             BtEnabled = s.BtEnabled,
             BtListenPort = s.BtPort,

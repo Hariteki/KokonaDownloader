@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using KokonaDownloader.Core.Engine.Idm;
+using KokonaDownloader.Core.Settings;
 
 namespace KokonaDownloader.Core.Engine;
 
@@ -33,6 +35,8 @@ public sealed class DownloadEngine : IAsyncDisposable
     private readonly TombstoneStore _tombstones;
     /// <summary>下载前的"真实文件名"预解析器（第十轮，见测试报告 §16）。</summary>
     private readonly RemoteNameResolver _nameResolver;
+    /// <summary>HTTP/HTTPS/FTP 走自研 IDM 协议引擎；BT/磁力仍交给 aria2。</summary>
+    private readonly IdmTaskManager _idm;
     /// <summary>引擎自愈锁：多个任务同时撞上"引擎已退出"时只重启一次。</summary>
     private readonly SemaphoreSlim _engineRestartLock = new(1, 1);
     private readonly Action<string> _log;
@@ -102,6 +106,9 @@ public sealed class DownloadEngine : IAsyncDisposable
 
     public event EventHandler<EngineEventArgs>? EngineEvent;
     public bool IsRunning => _process.IsRunning;
+
+    /// <summary>该 gid 是否由自研 IDM 协议引擎持有（API 判存、测试断言用）。</summary>
+    public bool IsIdmTask(string gid) => IdmTaskManager.IsIdmGid(gid) && _idm.Contains(gid);
     public EngineConfig Config => _config;
 
     public DownloadEngine(EngineConfig config, TaskStore store, Action<string>? log = null)
@@ -112,8 +119,15 @@ public sealed class DownloadEngine : IAsyncDisposable
         // 墓碑文件与会话文件同目录：启动 aria2 前用它过滤会话中已删除的条目
         _tombstones = new TombstoneStore(Path.Combine(config.WorkDir, "tombstones.json"));
         _process = new Aria2Process(config, _tombstones, _log);
-        _client = new Aria2RpcClient("127.0.0.1", config.RpcPort, config.RpcSecret);
+        _client = new Aria2RpcClient("127.0.0.1", config.RpcPort, config.RpcSecret)
+        {
+            // 让"RPC 瞬时失败已重试"这条写进 app.log：真出现端口被短暂占用时，
+            // 日志里能直接看到，而不是等到用户报"偶发失败"再猜。
+            _logTransient = msg => _log(msg),
+        };
         _nameResolver = new RemoteNameResolver(_log);
+        _idm = new IdmTaskManager(config.DefaultDownloadDir, config.DefaultConnections, _log,
+            config.MaxConcurrentDownloads, config.IdmPartsDir ?? AppPaths.PartsDir, config.Http2Enabled);
         // 用持久化元数据里的最大编号初始化：系统时钟回拨后重启也不会发出重复编号
         _lastTaskNumber = _store.All().Select(m => m.TaskNumber).DefaultIfEmpty(0).Max();
         _defaultDir = config.DefaultDownloadDir;
@@ -123,6 +137,9 @@ public sealed class DownloadEngine : IAsyncDisposable
         foreach (var m in _store.Finished())
             if (HistoryRow(m) is { } row) _history[row.Gid] = row;
         if (!_history.IsEmpty) _log($"本地历史已恢复 { _history.Count} 条已完成/失败记录");
+
+        // IDM 协议任务：aria2 的会话文件里没有它们，重启后靠元数据 + 断点文件重建为「已暂停」
+        _idm.Restore(_store.All().OrderBy(m => m.AddedAt));
     }
 
     /// <summary>生成任务唯一编号：取当前时间戳（yyyyMMddHHmmssfff），与时钟无关的并发/回拨用单调递增兜底。</summary>
@@ -269,6 +286,8 @@ public sealed class DownloadEngine : IAsyncDisposable
             _defaultConnections = c;
             _log($"默认线程数已热更新为 {c}");
         }
+        // IDM 协议引擎持有自己的一份默认值，必须同步，否则新任务仍用旧目录/旧连接数
+        _idm.UpdateDefaults(_defaultDir, _defaultConnections);
         InvalidateSnapshot();
     }
 
@@ -279,6 +298,8 @@ public sealed class DownloadEngine : IAsyncDisposable
         await _client.ChangeGlobalOptionAsync(
             new Dictionary<string, string> { ["max-concurrent-downloads"] = value.ToString() }, ct).ConfigureAwait(false);
         _maxConcurrentDownloads = value;
+        // aria2 只管它自己的任务；自研引擎有独立队列，必须同步下发，否则"最大同时下载数"对它无效
+        _idm.SetMaxConcurrent(value);
         _log($"最大并发任务数已热更新为 {value}");
     }
 
@@ -658,6 +679,12 @@ public sealed class DownloadEngine : IAsyncDisposable
 
                 var tasks = raws.Where(r => !metaGids.Contains(r.Gid)).Select(ToTaskInfo).ToList();
 
+                // ── 收敛点：IDM 协议任务在此并入同一个集合 ──
+                // 之后的状态迁移 / _lastStates / PruneStaleMetasOnce / WithHistory / 快照发布
+                // 全部共用这一份 tasks，无需再为 IDM 单独开分支。
+                var idmTasks = _idm.Snapshot();
+                if (idmTasks.Count > 0) tasks.AddRange(idmTasks);
+
                 // 统计
                 var gstat = call.Count > 3 ? call.Deserialize<Aria2GlobalStat>(3) : null;
                 var stats = new GlobalStat
@@ -668,6 +695,13 @@ public sealed class DownloadEngine : IAsyncDisposable
                     NumWaiting = gstat?.NumWaiting ?? 0,
                     NumStopped = gstat?.NumStopped ?? 0
                 };
+                if (idmTasks.Count > 0)
+                {
+                    stats.DownloadSpeed += _idm.TotalSpeed;
+                    stats.NumActive += idmTasks.Count(t => t.State == TaskState.Active);
+                    stats.NumWaiting += idmTasks.Count(t => t.State == TaskState.Waiting);
+                    stats.NumStopped += idmTasks.Count(t => t.State is TaskState.Completed or TaskState.Failed);
+                }
 
                 // 诊断打点：任务集合或统计变化时记录一次（空轮询静默）。
                 // 每轮比较用无分配的整数指纹（见 ComputePollDiagFingerprint）；
@@ -725,7 +759,7 @@ public sealed class DownloadEngine : IAsyncDisposable
                 // 列表并入本地历史：aria2 不会把已完成任务写进 --save-session（实测会话文件 0 字节），
                 // 重启后这些行只能由客户端补回，否则 UI 与 GET /api/tasks 会一起"失忆"（P2-4）。
                 PruneStaleMetasOnce(tasks);
-                var published = WithHistory(tasks);
+                var published = WithHistory(tasks);   // tasks 已含 IDM 任务
                 _latestSnapshot = published;
                 _latestStats = stats;
                 Volatile.Write(ref _latestSnapshotTicks, DateTime.Now.Ticks);
@@ -1052,6 +1086,40 @@ public sealed class DownloadEngine : IAsyncDisposable
 
     public async Task<DownloadTaskInfo> AddTaskAsync(NewTaskRequest req, CancellationToken ct = default)
     {
+        // IDM 协议接管：HTTP/HTTPS/FTP 走自研分段引擎（BT/磁力继续走 aria2）
+        if (_config.UseIdmProtocol && req.Urls.Count > 0
+            && !req.Urls.Any(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase))
+            && IdmTaskManager.Handles(req.Urls[0]))
+        {
+            // 与 aria2 路径同一套重名规则：用户显式给了文件名且目录里已存在时先改名（file.bin → file (1).bin），
+            // 让列表从一开始就显示真实落盘名；未给文件名的情况由下载器在完成时兜底改名。
+            req = ApplyUniqueFileName(req);
+
+            long idmNumber = NextTaskNumber();
+            string idmGid = $"idm-{idmNumber}";
+            var idmTask = _idm.Add(idmGid, idmNumber, req);
+
+            // 与 aria2 路径对齐：登记新建标记（进度浮窗靠它）、撤销墓碑、落元数据（重启/历史靠它）
+            _newTaskGids[idmGid] = 0;
+            _tombstones.Unmark(req.Urls, req.Directory ?? _defaultDir);
+            _store.AddMeta(idmGid, new TaskMeta
+            {
+                Gid = idmGid,
+                TaskNumber = idmNumber,
+                Name = idmTask.Name,
+                Urls = new List<string>(req.Urls),
+                Referer = req.Referer,
+                Headers = req.Headers,   // 重启后续传要靠它重新带上 Cookie/UA
+                AddedAt = idmTask.AddedAt,
+                IsBt = false,
+                Dir = idmTask.Dir,
+            });
+
+            _log($"[idm] 接管下载 {req.Urls[0]} → {idmGid} (taskNumber={idmNumber})");
+            InvalidateSnapshot();
+            return idmTask;
+        }
+
         var isMagnet = req.Urls.Any(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase));
         if (isMagnet)
         {
@@ -1174,6 +1242,32 @@ public sealed class DownloadEngine : IAsyncDisposable
     public async Task<List<DownloadTaskInfo>> AddTasksAsync(IEnumerable<NewTaskRequest> requests, CancellationToken ct = default)
     {
         var list = requests.ToList();
+
+        // 开了自研引擎后，批量里的 HTTP/HTTPS/FTP 也必须走新引擎。
+        // 否则用户一次粘十条链接时走的还是 aria2 —— 协议等于没换（真机复现：gid 是纯 hex）。
+        if (_config.UseIdmProtocol)
+        {
+            var routed = new List<DownloadTaskInfo>();
+            var aria2Batch = new List<NewTaskRequest>();
+            foreach (var r in list)
+            {
+                bool isMagnet = r.Urls.Any(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase));
+                if (!isMagnet && r.Urls.Count > 0 && IdmTaskManager.Handles(r.Urls[0]))
+                    routed.Add(await AddTaskAsync(r, ct).ConfigureAwait(false));
+                else
+                    aria2Batch.Add(r);
+            }
+            if (aria2Batch.Count > 0)
+                routed.AddRange(await AddTasksViaAria2Async(aria2Batch, ct).ConfigureAwait(false));
+            return routed;
+        }
+
+        return await AddTasksViaAria2Async(list, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>批量添加里仍由 aria2 承担的那部分（磁力/种子任务）。</summary>
+    private async Task<List<DownloadTaskInfo>> AddTasksViaAria2Async(List<NewTaskRequest> list, CancellationToken ct)
+    {
         foreach (var r in list)
         {
             var m = r.Urls.FirstOrDefault(u => u.StartsWith("magnet:", StringComparison.OrdinalIgnoreCase));
@@ -1227,24 +1321,39 @@ public sealed class DownloadEngine : IAsyncDisposable
     // 不作废就会让"扩展刚发指令就立刻回查"拿到指令前的旧状态。
     public async Task PauseAsync(string gid, CancellationToken ct = default)
     {
+        if (IdmTaskManager.IsIdmGid(gid))
+        {
+            if (!_idm.Contains(gid)) throw new InvalidOperationException($"任务 {gid} 不存在");
+            _idm.Pause(gid); InvalidateSnapshot(); return;
+        }
         await WithEngineGuardAsync("暂停任务", c => _client.PauseAsync(gid, c), ct).ConfigureAwait(false);
         InvalidateSnapshot();
     }
 
     public async Task ResumeAsync(string gid, CancellationToken ct = default)
     {
+        if (IdmTaskManager.IsIdmGid(gid))
+        {
+            if (!_idm.Contains(gid)) throw new InvalidOperationException($"任务 {gid} 不存在");
+            await _idm.ResumeAsync(gid, BuildIdmResumeRequest(gid)).ConfigureAwait(false);
+            InvalidateSnapshot(); return;
+        }
         await WithEngineGuardAsync("继续任务", c => _client.UnpauseAsync(gid, c), ct).ConfigureAwait(false);
         InvalidateSnapshot();
     }
 
     public async Task PauseAllAsync(CancellationToken ct = default)
     {
+        // IDM 协议任务不在 aria2 里：不单独处理的话「全部暂停」只停了一半，剩下的继续跑
+        int idm = _idm.PauseAll();
+        if (idm > 0) _log($"[idm] 全部暂停：{idm} 个任务已暂停");
         await WithEngineGuardAsync("暂停全部任务", c => _client.PauseAllAsync(c), ct).ConfigureAwait(false);
         InvalidateSnapshot();
     }
 
     public async Task ResumeAllAsync(CancellationToken ct = default)
     {
+        await _idm.ResumeAllAsync().ConfigureAwait(false);
         await WithEngineGuardAsync("继续全部任务", c => _client.UnpauseAllAsync(c), ct).ConfigureAwait(false);
         InvalidateSnapshot();
     }
@@ -1252,6 +1361,14 @@ public sealed class DownloadEngine : IAsyncDisposable
     /// <summary>删除任务。对已完成/失败的任务调用 removeDownloadResult 清理。</summary>
     public async Task RemoveAsync(string gid, bool deleteFile = false, CancellationToken ct = default)
     {
+        if (IdmTaskManager.IsIdmGid(gid))
+        {
+            if (!_idm.Remove(gid, deleteFile)) throw new InvalidOperationException($"任务 {gid} 不存在");
+            // 与 aria2 路径对齐：元数据/历史行一并清掉，否则重启后任务会从"已完成"里冒出来
+            _store.RemoveMeta(gid);
+            _history.TryRemove(gid, out _);
+            InvalidateSnapshot(); return;
+        }
         Aria2TaskStatus? status = null;
         try { status = await _client.TellStatusAsync(gid, ct).ConfigureAwait(false); } catch { }
 
@@ -1386,6 +1503,7 @@ public sealed class DownloadEngine : IAsyncDisposable
 
     public async Task<DownloadTaskInfo?> GetTaskAsync(string gid, CancellationToken ct = default)
     {
+        if (IdmTaskManager.IsIdmGid(gid)) return _idm.Get(gid);
         var status = await _client.TellStatusAsync(gid, ct).ConfigureAwait(false);
         return status != null ? ToTaskInfo(status) : null;
     }
@@ -1403,11 +1521,25 @@ public sealed class DownloadEngine : IAsyncDisposable
         return OrderTasks(WithHistory(await GetAllTasksLiveAsync(ct).ConfigureAwait(false)));
     }
 
+    /// <summary>IDM 任务续传时，用已记录的元数据重建请求。</summary>
+    private NewTaskRequest BuildIdmResumeRequest(string gid)
+    {
+        var info = _idm.Get(gid);
+        return new NewTaskRequest
+        {
+            Urls = info?.Urls ?? new List<string>(),
+            Directory = info?.Dir,
+            FileName = info?.Name,
+        };
+    }
+
     /// <summary>实时向 aria2 拉一次全量列表（不走快照）：判重预检等需要"此刻真实状态"的调用用它。</summary>
     private async Task<List<DownloadTaskInfo>> GetAllTasksLiveAsync(CancellationToken ct = default)
     {
         var (active, waiting, stopped) = await _client.TellAllAsync(ct: ct).ConfigureAwait(false);
-        return active.Concat(waiting).Concat(stopped).Select(ToTaskInfo).ToList();
+        var list = active.Concat(waiting).Concat(stopped).Select(ToTaskInfo).ToList();
+        list.AddRange(_idm.Snapshot());
+        return list;
     }
 
     /// <summary>统一排序：已完成/失败优先、按添加时间倒序。快照路径与实时路径共用，保证顺序一致。</summary>
@@ -1418,8 +1550,21 @@ public sealed class DownloadEngine : IAsyncDisposable
     /// <summary>全局统计。同样优先复用轮询快照里的那一份（与列表同一轮产生）。</summary>
     public async Task<GlobalStat> GetGlobalStatAsync(CancellationToken ct = default)
     {
-        if (TryGetRecentStats(ReadSnapshotMaxAgeMs) is { } stats) return stats;
-        return await _client.GetGlobalStatAsync(ct).ConfigureAwait(false);
+        // 快照里的统计在发布前已把 IDM 任务计入，这里必须原样返回同一个对象：
+        // 既有不变量要求「缓存路径零分配、连实例都相同」（SnapshotReadTests 用 ReferenceEquals 钉住），
+        // 顺手再 new 一次既破坏该不变量，也容易把 IDM 速度重复累加。
+        if (TryGetRecentStats(ReadSnapshotMaxAgeMs) is { } cached) return cached;
+        var stat = await _client.GetGlobalStatAsync(ct).ConfigureAwait(false);
+        return new GlobalStat
+        {
+            // 实时路径的 stat 来自 aria2 RPC，不含 IDM，必须补上（缓存路径则已含，勿重复）
+            DownloadSpeed = stat.DownloadSpeed + _idm.TotalSpeed,
+            UploadSpeed = stat.UploadSpeed,
+            // 计数同样补上 IDM（实时路径 aria2 不知道它们）
+            NumActive = stat.NumActive + _idm.Snapshot().Count(t => t.State == TaskState.Active),
+            NumWaiting = stat.NumWaiting,
+            NumStopped = stat.NumStopped,
+        };
     }
 
     /// <summary>
@@ -1455,11 +1600,13 @@ public sealed class DownloadEngine : IAsyncDisposable
     public async Task SetGlobalSpeedLimitAsync(long bytesPerSec, CancellationToken ct = default)
     {
         await _client.SetGlobalSpeedLimitAsync(bytesPerSec, ct).ConfigureAwait(false);
+        _idm.SetGlobalLimit(bytesPerSec);   // IDM 协议任务按活动数平分全局额度
         InvalidateSnapshot();
     }
 
     public async Task SetTaskSpeedLimitAsync(string gid, long bytesPerSec, CancellationToken ct = default)
     {
+        if (IdmTaskManager.IsIdmGid(gid)) { _idm.SetTaskLimit(gid, bytesPerSec); InvalidateSnapshot(); return; }
         await _client.SetTaskSpeedLimitAsync(gid, bytesPerSec, ct).ConfigureAwait(false);
         InvalidateSnapshot();
     }
@@ -1503,5 +1650,7 @@ public sealed class DownloadEngine : IAsyncDisposable
         _client.Dispose();
         _process.Dispose();
         _engineRestartLock.Dispose();
+        // IDM 协议引擎持有 HttpClient / 文件句柄，必须一并释放
+        try { await _idm.DisposeAsync().ConfigureAwait(false); } catch { }
     }
 }

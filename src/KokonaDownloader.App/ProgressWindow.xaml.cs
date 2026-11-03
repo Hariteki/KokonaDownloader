@@ -122,6 +122,15 @@ public partial class ProgressWindow : Window
     {
         // 终态小窗保留"打开文件夹"，但会被主界面回收（腾出窗口配额），见 MainWindow.ShouldCreateProgressWindow
         IsFinished = t.State is TaskState.Completed or TaskState.Failed or TaskState.Removed;
+
+        // 任务名可能在下载开始后才确定（URL 是 /download?id=123 时，真名要等响应头 Content-Disposition），
+        // 建窗时拿到的是 URL 猜测名，这里跟随最新名字刷新，否则浮窗会一直显示 "dl" 这类占位名。
+        if (!string.IsNullOrEmpty(t.Name) && !string.Equals(TitleText.Text, t.Name, StringComparison.Ordinal))
+        {
+            TitleText.Text = t.Name;
+            Title = t.Name;
+        }
+
         var percent = Math.Round(t.Progress * 100, 1);
         Bar.Value = percent;
         PercentText.Text = $"{percent:0.#}%";

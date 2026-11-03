@@ -77,6 +77,8 @@
                     <ToggleSwitch x:Name="InterceptSwitch" Header="浏览器扩展自动拦截下载" OnContent="开" OffContent="关"/>
                     <ToggleSwitch x:Name="MinimizeSwitch" Header="关闭时最小化到托盘" OnContent="开" OffContent="关"/>
                     <ToggleSwitch x:Name="StartupSwitch" Header="开机自动启动" OnContent="开" OffContent="关"/>
+                    <!-- 默认关：h2 是单连接多路复用，与"多连接并行"在弱网上是相反取向 -->
+                    <ToggleSwitch x:Name="Http2Switch" Header="HTTPS 尝试 HTTP/2（实验）" OnContent="开" OffContent="关"/>
                 </StackPanel>
 
                 <StackPanel Spacing="4">

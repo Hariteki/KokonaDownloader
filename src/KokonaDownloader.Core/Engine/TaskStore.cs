@@ -13,6 +13,8 @@ public sealed class TaskMeta
     public string Name { get; set; } = string.Empty;
     public List<string> Urls { get; set; } = new();
     public string? Referer { get; set; }
+    /// <summary>额外请求头（"Name: Value" 形式）。重启后续传必须带上，否则 403。</summary>
+    public List<string>? Headers { get; set; }
     public DateTime AddedAt { get; set; }
     public DateTime? FinishedAt { get; set; }
     public string? FinalState { get; set; }

@@ -120,7 +120,10 @@ public sealed class EngineConfig
     /// <summary>工作目录：存放会话文件与日志。</summary>
     public required string WorkDir { get; init; }
     public required string DefaultDownloadDir { get; init; }
-    public int RpcPort { get; init; } = 16800;
+    // 默认值必须与 AppSettings.RpcPort 一致（16801）。曾经写成 16800——那正是客户端自己
+    // HTTP API 的端口：任何忘记显式赋值的构造都会让 RPC 打到 API 上，表现为"HTTP 404"，
+    // 排查时完全看不出是端口配错。
+    public int RpcPort { get; init; } = 16801;
     public string RpcSecret { get; init; } = GenerateSecret();
     public int MaxConcurrentDownloads { get; init; } = 3;
     public int DefaultConnections { get; init; } = 8;
@@ -128,6 +131,25 @@ public sealed class EngineConfig
     public long GlobalSpeedLimit { get; init; }
     /// <summary>轮询间隔（毫秒）。</summary>
     public int PollIntervalMs { get; init; } = 800;
+    /// <summary>
+    /// HTTP/HTTPS/FTP 是否使用自研 IDM 协议引擎（默认关闭，保持既有 aria2 行为；
+    /// 应用层 AppHost 显式置 true 启用）。BT/磁力始终走 aria2，不受此开关影响。
+    /// </summary>
+    public bool UseIdmProtocol { get; init; }
+
+    /// <summary>
+    /// IDM 协议引擎的断点目录（.kdpart 与状态文件）。为空时用 %APPDATA%\KokonaDownloader\parts。
+    /// 测试用临时目录覆盖，避免污染真实用户数据。
+    /// </summary>
+    public string? IdmPartsDir { get; init; }
+
+    /// <summary>
+    /// HTTPS 上是否尝试 HTTP/2（默认关）。h2 是**单 TCP 连接多路复用**，而本引擎的
+    /// 核心手段恰恰是"多连接并行"：遇到丢包时 h1 只损失 1/N 带宽，h2 会让全部流一起停。
+    /// 回环实测两者吞吐持平（13.1 vs 12.2 MB/s），收益只在"高延迟/TLS 握手次数/站点限制连接数"这些场景，
+    /// 代价却是在弱网上更脆。所以做成显式开关，而不是默认替换。
+    /// </summary>
+    public bool Http2Enabled { get; init; }
 
     // ---- BitTorrent ----
     /// <summary>是否启用 BT/磁力支持（禁用时 aria2 不加载 DHT 等模块）。</summary>

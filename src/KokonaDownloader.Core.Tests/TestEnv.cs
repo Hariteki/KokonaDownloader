@@ -46,7 +46,7 @@ internal static class TestEnv
     public sealed class FileServer : IDisposable
     {
         private readonly HttpListener _listener = new();
-        private readonly Dictionary<string, (byte[] Content, Dictionary<string, string> Headers, int ChunkBytes, int ChunkDelayMs, bool IgnoreRange)> _files = new();
+        private readonly Dictionary<string, (byte[] Content, Dictionary<string, string> Headers, int ChunkBytes, int ChunkDelayMs, bool IgnoreRange, int FailRangeStatus, int StallAfterBytes, bool Chunked, string? ForbidUa)> _files = new();
         private readonly Dictionary<string, string> _redirects = new();
         public int Port { get; }
 
@@ -71,12 +71,65 @@ internal static class TestEnv
         /// <param name="ignoreRange">true 时**收到 Range 也照样回整份 200**（仍声明 Accept-Ranges: bytes）：
         /// 这就是现实里"不支持断点续传的服务器"，aria2 会报 errorCode=8 Invalid range header。
         /// 第八轮 P2-3（失败后留下大小正确、内容损坏的文件）只能靠它复现。</param>
+        /// <param name="failRangeStatus">带 Range 的请求直接回这个状态码（0 = 正常）。
+        /// 用来复现"首包能探测成功，但所有分片连接都被拒"——例如下载到一半签名过期。
+        /// 没有这条，监视器会一直重新认领又失败，任务永远停在"下载中"。</param>
+        /// <param name="stallAfterBytes">写出这么多字节后**保持连接但不再发数据**（0 = 正常）。
+        /// 复现"服务器吊着不关连接"：客户端 ReadAsync 永远等下去，因为没有读超时。</param>
+        /// <param name="chunked">true 时不发 Content-Length，改用 chunked 传输——
+        /// 现实里"动态生成的文件"（导出接口、拼装出来的 zip）就是这样，客户端拿不到总长度。</param>
+        /// <summary>
+        /// 真实镜像站的行为：User-Agent 里含某个片段就回 403。
+        /// 清华 / 中科大镜像实测会拒绝现代浏览器 UA，而 curl、IE11 的 UA 放行——
+        /// 扩展接管下载时会透传 Edge 的 UA，于是"浏览器能下、接管后 403"。
+        /// </summary>
         public void AddFile(string path, byte[] content, Dictionary<string, string>? headers = null,
-            int chunkBytes = 0, int chunkDelayMs = 0, bool ignoreRange = false)
-            => _files[path.TrimStart('/')] = (content, headers ?? new Dictionary<string, string>(), chunkBytes, chunkDelayMs, ignoreRange);
+            int chunkBytes = 0, int chunkDelayMs = 0, bool ignoreRange = false,
+            int failRangeStatus = 0, int stallAfterBytes = 0, bool chunked = false,
+            string? forbidUaSubstring = null)
+            => _files[path.TrimStart('/')] = (content, headers ?? new Dictionary<string, string>(),
+                chunkBytes, chunkDelayMs, ignoreRange, failRangeStatus, stallAfterBytes, chunked, forbidUaSubstring);
+
+        private int _forbidden;
+        /// <summary>因 UA 被拒的次数（断言"确实先撞了一次 403，再回退成功"）。</summary>
+        public int ForbiddenCount => Volatile.Read(ref _forbidden);
+
+        // ---- 并发观测：用"服务端视角"量客户端到底同时开了几条连接 ----
+        // 客户端自己报的连接数只反映它的意图；真正同时在传的条数只有服务端看得准。
+        private int _active;
+        private int _maxActive;
+        private long _firstRequestTicks = -1;
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<int, long> _firstReachTicks = new();
+
+        public int MaxConcurrent => Volatile.Read(ref _maxActive);
+
+        /// <summary>从第一条请求到"第 n 条连接同时在传"花了多少毫秒；从未达到返回 null。</summary>
+        public double? RampMsTo(int n)
+        {
+            if (!_firstReachTicks.TryGetValue(n, out var at)) return null;
+            long first = Interlocked.Read(ref _firstRequestTicks);
+            if (first < 0) return null;
+            return (at - first) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        }
+
+        private void EnterRequest()
+        {
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            Interlocked.CompareExchange(ref _firstRequestTicks, now, -1);
+            int active = Interlocked.Increment(ref _active);
+            _firstReachTicks.TryAdd(active, now);
+            int seen;
+            while (active > (seen = Volatile.Read(ref _maxActive)))
+                Interlocked.CompareExchange(ref _maxActive, active, seen);
+        }
+
+        private void ExitRequest() => Interlocked.Decrement(ref _active);
         public string Url(string path) => $"http://127.0.0.1:{Port}/{path.TrimStart('/')}";
         /// <summary>把 path 配置为 302 重定向到 location（通常是另一个 Url(...)）。</summary>
         public void AddRedirect(string path, string location) => _redirects[path.TrimStart('/')] = location;
+
+        /// <summary>每条请求的请求头快照（断言"扩展传来的 Cookie/UA 真的发出去了"）。</summary>
+        public readonly System.Collections.Concurrent.ConcurrentQueue<Dictionary<string, string>> RequestHeaders = new();
 
         private async Task Loop()
         {
@@ -91,10 +144,22 @@ internal static class TestEnv
 
         private async Task HandleAsync(HttpListenerContext ctx)
         {
+            EnterRequest();
+            try { await HandleCoreAsync(ctx).ConfigureAwait(false); }
+            finally { ExitRequest(); }
+        }
+
+        private async Task HandleCoreAsync(HttpListenerContext ctx)
+        {
             try
             {
                 var path = ctx.Request.Url!.AbsolutePath.TrimStart('/');
                 _requestCounts.AddOrUpdate(path, 1, (_, n) => n + 1);
+
+                var snapshot = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string? key in ctx.Request.Headers.AllKeys)
+                    if (key is not null) snapshot[key] = ctx.Request.Headers[key] ?? "";
+                RequestHeaders.Enqueue(snapshot);
                 if (_redirects.TryGetValue(path, out var location))
                 {
                     ctx.Response.StatusCode = 302;
@@ -102,6 +167,15 @@ internal static class TestEnv
                 }
                 else if (_files.TryGetValue(path, out var entry))
                 {
+                    if (entry.ForbidUa is { } bad
+                        && (ctx.Request.Headers["User-Agent"] ?? "").Contains(bad, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Interlocked.Increment(ref _forbidden);
+                        ctx.Response.StatusCode = 403;
+                        ctx.Response.Close();
+                        return;
+                    }
+
                     foreach (var kv in entry.Headers)
                         ctx.Response.Headers[kv.Key] = kv.Value;
                     ctx.Response.Headers["Accept-Ranges"] = "bytes";
@@ -110,20 +184,26 @@ internal static class TestEnv
                     var rangeHeader = ctx.Request.Headers["Range"];
                     var askedForRange = !string.IsNullOrWhiteSpace(rangeHeader);
                     if (askedForRange) Interlocked.Increment(ref _rangeRequests);
-                    var range = entry.IgnoreRange ? null : TryParseRange(rangeHeader, entry.Content.Length);
-                    if (range is { } r)
+                    // chunked 的响应没法给 Content-Range，一并不做区间
+                    var range = (entry.IgnoreRange || entry.Chunked) ? null : TryParseRange(rangeHeader, entry.Content.Length);
+                    if (askedForRange && entry.FailRangeStatus > 0)
+                    {
+                        ctx.Response.StatusCode = entry.FailRangeStatus;
+                    }
+                    else if (range is { } r)
                     {
                         var len = r.End - r.Start + 1;
                         ctx.Response.StatusCode = 206;
                         ctx.Response.Headers["Content-Range"] = $"bytes {r.Start}-{r.End}/{entry.Content.Length}";
                         ctx.Response.ContentLength64 = len;
-                        await WriteBodyAsync(ctx, entry.Content, r.Start, len, entry.ChunkBytes, entry.ChunkDelayMs);
+                        await WriteBodyAsync(ctx, entry.Content, r.Start, len, entry.ChunkBytes, entry.ChunkDelayMs, entry.StallAfterBytes);
                     }
                     else
                     {
                         ctx.Response.StatusCode = 200;
-                        ctx.Response.ContentLength64 = entry.Content.Length;
-                        await WriteBodyAsync(ctx, entry.Content, 0, entry.Content.Length, entry.ChunkBytes, entry.ChunkDelayMs);
+                        if (entry.Chunked) ctx.Response.SendChunked = true;
+                        else ctx.Response.ContentLength64 = entry.Content.Length;
+                        await WriteBodyAsync(ctx, entry.Content, 0, entry.Content.Length, entry.ChunkBytes, entry.ChunkDelayMs, entry.StallAfterBytes);
                     }
                 }
                 else
@@ -142,7 +222,7 @@ internal static class TestEnv
         /// 连带把同一进程里其它测试的 HTTP 调用一起拖死（表现为大面积超时）。
         /// </summary>
         private static async Task WriteBodyAsync(HttpListenerContext ctx, byte[] content, int offset, int length,
-            int chunkBytes, int chunkDelayMs)
+            int chunkBytes, int chunkDelayMs, int stallAfterBytes = 0)
         {
             var outStream = ctx.Response.OutputStream;
             if (chunkBytes <= 0)
@@ -157,6 +237,14 @@ internal static class TestEnv
                 await outStream.WriteAsync(content.AsMemory(offset + sent, n)).ConfigureAwait(false);
                 await outStream.FlushAsync().ConfigureAwait(false);
                 sent += n;
+                if (stallAfterBytes > 0 && sent >= stallAfterBytes)
+                {
+                    // 关键：**不是 return**。返回会让 HttpListener 关闭连接，
+                    // 客户端读到的是"正常 EOF"（截断），那是另一个 bug 场景。
+                    // 这里保持连接、一个字节都不发，复现真正的"吊死"。
+                    await Task.Delay(TimeSpan.FromSeconds(20)).ConfigureAwait(false);
+                    return;
+                }
                 if (chunkDelayMs > 0) await Task.Delay(chunkDelayMs).ConfigureAwait(false);
             }
         }
