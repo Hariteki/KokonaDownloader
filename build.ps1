@@ -30,7 +30,8 @@ if ($LASTEXITCODE -ne 0) { throw "Client build failed" }
 Write-Host "==> [2/3] Copying browser extension..." -ForegroundColor Cyan
 $extOut = Join-Path $dist "KokonaExtension"
 if (Test-Path $extOut) { Remove-Item $extOut -Recurse -Force }
-Copy-Item (Join-Path $root "extension") $extOut -Recurse
+# 现行版本是 extension-v2；extension/ 是已废弃的第一版，只留作历史参考
+Copy-Item (Join-Path $root "extension-v2") $extOut -Recurse
 
 Write-Host "==> [3/3] Done" -ForegroundColor Green
 Write-Host "Client:   $dist\KokonaDownloader\KokonaDownloader.exe"
