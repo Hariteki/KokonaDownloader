@@ -110,6 +110,11 @@ public partial class App : Application
 
         MainWin = new MainWindow();
 
+        // 托盘菜单预热：把 WinUI 宿主窗口的创建从"用户第一次右键"挪到启动空闲时段。
+        // 低优先级排队，不拖慢启动、不与主窗口首帧抢 UI 线程。
+        MainWin.DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            () => TrayMenu?.Warm());
+
         // magnet: 协议唤起的 IPC 服务端 + 注册表注册（HKCU，无需管理员）
         MagnetIpc.StartServer(url => MainWin?.HandleExternalMagnet(url));
         MagnetProtocol.Register();

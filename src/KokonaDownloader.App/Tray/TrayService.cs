@@ -20,6 +20,7 @@ public sealed class TrayService : IDisposable
     private TrayProgress _last = new(0, 0, 0, 0);
     private double _lastDrawnPercent = -1;
     private bool _lastBusy;
+    private string? _lastTooltip;
 
     public event Action? ShowRequested;
 
@@ -85,6 +86,11 @@ public sealed class TrayService : IDisposable
             ? $"海兔下载器\n总进度 {_last.Percent:0.#}% · {FormatUtil.FormatBytes(_last.DownloadSpeed)}/s\n下载中 {_last.ActiveCount} · 等待 {_last.WaitingCount}"
             : "海兔下载器\n空闲";
         if (text.Length > 63) text = text[..63];
+        // 每次设置 Text 都是一次同步的 Shell_NotifyIcon(NIM_MODIFY)，走的是 Explorer 的托盘线程。
+        // 引擎每轮都会推 StatsUpdated，空闲时文案完全一样却照样打扰 Explorer——
+        // 右键菜单的分发同样由那条线程负责，无谓的更新会直接拖慢点击响应。
+        if (text == _lastTooltip) return;
+        _lastTooltip = text;
         _notifyIcon.Text = text;
     }
 
