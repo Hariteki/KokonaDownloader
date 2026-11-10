@@ -48,7 +48,7 @@ foreach ($proc in $procs) {
 
 $ping = Test-Ping
 Write-Host ("ping: " + $ping)
-if ($null -ne $ping -and $ping -match '"version":"1\.1\.1"') { Write-Host "PASS: fallback relaunch works, ping 200 v1.1.1" } else { Write-Host "FAIL: fallback relaunch broken" }
+if ($null -ne $ping -and $ping -match '"version":"1\.1\.2"') { Write-Host "PASS: fallback relaunch works, ping 200 v1.1.2" } else { Write-Host "FAIL: fallback relaunch broken" }
 
 $after = if (Test-Path $fallback) { (Get-ChildItem $fallback -Recurse -File).Count } else { 0 }
 Write-Host ("fallback dir files after (recursive, incl. exe copy): " + $after)
