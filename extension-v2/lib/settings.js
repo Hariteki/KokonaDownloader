@@ -5,6 +5,10 @@ import { normalizeSettings, defaults } from './logic.js';
 const KEY_SETTINGS = 'settings';
 const KEY_SESSION_START = 'sessionStartMs';
 const KEY_RECENT = 'recentForwards';
+const KEY_BYPASS = 'bypassOnce';
+
+/** 一次性放行名单的有效期：浏览器重新发起下载通常在一两秒内，5 分钟足够宽松。 */
+const BYPASS_TTL_MS = 5 * 60 * 1000;
 
 export async function loadSettings() {
   const obj = await chrome.storage.local.get(KEY_SETTINGS);
@@ -45,6 +49,34 @@ export async function markForwarded(key) {
   }
   next[key] = now;
   await chrome.storage.session.set({ [KEY_RECENT]: next });
+}
+
+/**
+ * 记一次"这次别接管"：用户在右键菜单里选了浏览器下载，紧接着浏览器会触发
+ * downloads.onCreated；用一次性名单让那一条直接放行，不转发也不取消。
+ */
+export async function addBypass(key) {
+  if (!key) return;
+  const now = Date.now();
+  const obj = await chrome.storage.session.get(KEY_BYPASS);
+  const map = {};
+  for (const [k, at] of Object.entries((obj && obj[KEY_BYPASS]) || {})) {
+    if (now - at < BYPASS_TTL_MS) map[k] = at;
+  }
+  map[key] = now;
+  await chrome.storage.session.set({ [KEY_BYPASS]: map });
+}
+
+/** 命中即消费（删掉），避免同一条链接后续的手动下载也被永久放行。 */
+export async function consumeBypass(key) {
+  if (!key) return false;
+  const obj = await chrome.storage.session.get(KEY_BYPASS);
+  const map = (obj && obj[KEY_BYPASS]) || {};
+  const at = map[key];
+  if (!at) return false;
+  delete map[key];
+  await chrome.storage.session.set({ [KEY_BYPASS]: map });
+  return Date.now() - at < BYPASS_TTL_MS;
 }
 
 export function defaultsForUi() {

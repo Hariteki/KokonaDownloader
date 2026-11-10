@@ -147,3 +147,21 @@ export function shouldCapture(item, settings, sessionStartMs) {
   if (isOwnApiUrl(item.url, settings)) return false;
   return isFreshDownload(item, sessionStartMs);
 }
+
+/**
+ * 把"Range 探测"的 HTTP 状态码翻译成能力判定：
+ *  - 206：真的兑现区间请求 → 支持多线程分段，值得接管
+ *  - 200：忽略 Range 直接发整份（含"声明了 Accept-Ranges 但不兑现"的撒谎服务器）→ 不支持
+ *  - 416：拒绝区间 → 不支持
+ *  - 其它（401/403/404/5xx/网络错误）：无法判断，交回调用方按原逻辑处理
+ */
+export function classifyRangeProbe(status) {
+  if (status === 206) return 'yes';
+  if (status === 200 || status === 416) return 'no';
+  return 'unknown';
+}
+
+/** 探测结论是否值得提示用户（明确不支持才提示，避免打扰）。 */
+export function probeNotice(verdict) {
+  return verdict === 'no' ? '该链接不支持多线程分段，已交给浏览器下载' : '';
+}

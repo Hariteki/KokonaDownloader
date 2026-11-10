@@ -37,6 +37,7 @@ export function makeChrome(options = {}) {
   const record = (name, args) => calls.push({ name, args });
   /** 模拟浏览器的动态规则表：updateDynamicRules 会真的增删，便于断言"最终态"。 */
   const dynamicRules = [];
+  let downloadSeq = 100;
 
   const chrome = {
     runtime: {
@@ -59,6 +60,7 @@ export function makeChrome(options = {}) {
     },
     downloads: {
       onCreated: makeEvent(),
+      download: async (opts) => { record('downloads.download', [opts]); return ++downloadSeq; },
       cancel: async (id) => record('downloads.cancel', [id]),
       erase: async (q) => record('downloads.erase', [q]),
     },

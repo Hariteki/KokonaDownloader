@@ -23,6 +23,20 @@ async function startStub(opts = {}) {
       const entry = { method: req.method, url: req.url, headers: req.headers, body };
       requests.push(entry);
 
+      // 本机"文件主机"：默认兑现 Range（206）；rangeSupport=false 时假装不支持（200 整份返回）
+      if (req.url.startsWith('/file/')) {
+        if (req.headers.range && opts.rangeSupport !== false) {
+          res.writeHead(206, {
+            'Content-Type': 'application/octet-stream',
+            'Content-Range': 'bytes 0-1/4',
+            'Content-Length': '2',
+          });
+          return res.end('ab');
+        }
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': '4' });
+        return res.end('abcd');
+      }
+
       const send = (code, obj) => {
         res.writeHead(code, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(obj));
@@ -89,6 +103,11 @@ function makeDownloadItem(overrides = {}) {
   }, overrides);
 }
 
+/** 指向假「文件主机」的下载地址：接管链路要用它，这样 Range 探测结果是确定的。 */
+function fileUrl(stub, name) {
+  return `http://127.0.0.1:${stub.port}/file/${name}`;
+}
+
 function bootChrome(stub, extra = {}) {
   return makeChrome(Object.assign({
     local: { settings: { host: '127.0.0.1', port: stub.port, secret: 's3cret', autoCapture: true } },
@@ -102,7 +121,8 @@ test('自动接管：带上 Cookie/UA 转发，并取消浏览器下载', async 
   const chrome = bootChrome(stub);
   try {
     await bootWorker(chrome);
-    chrome.downloads.onCreated.__fire(makeDownloadItem());
+    const url = fileUrl(stub, 'a.zip');
+    chrome.downloads.onCreated.__fire(makeDownloadItem({ url }));
 
     assert.equal(await waitFor(() => stub.downloads().length === 1), true, '没有发出 /api/download');
 
@@ -110,7 +130,7 @@ test('自动接管：带上 Cookie/UA 转发，并取消浏览器下载', async 
     assert.equal(req.method, 'POST');
     assert.equal(req.headers['x-kokona-secret'], 's3cret');
     const payload = JSON.parse(req.body);
-    assert.deepEqual(payload.urls, ['https://example.com/a.zip']);
+    assert.deepEqual(payload.urls, [url]);
     assert.equal(payload.referer, 'https://example.com/page');
     assert.equal('filename' in payload, false, '不该猜文件名');
     assert.deepEqual(payload.headers.filter((h) => h.startsWith('Cookie: ')), ['Cookie: sid=abc123; uid=1']);
@@ -128,7 +148,7 @@ test('失败不取消浏览器下载：401 与离线都要保留原生下载', a
   const chrome = bootChrome(stub);
   try {
     await bootWorker(chrome);
-    chrome.downloads.onCreated.__fire(makeDownloadItem({ url: 'https://example.com/401.zip' }));
+    chrome.downloads.onCreated.__fire(makeDownloadItem({ url: fileUrl(stub, '401.zip') }));
     assert.equal(await waitFor(() => stub.downloads().length === 1), true);
     await wait(100);
     assert.equal(chrome.__callsOf('downloads.cancel').length, 0, '失败时绝不能取消浏览器下载');
@@ -140,7 +160,7 @@ test('失败不取消浏览器下载：401 与离线都要保留原生下载', a
   // 离线：端口关掉再触发
   const chrome2 = bootChrome(stub); // stub 已关闭，端口不可达
   await bootWorker(chrome2);
-  chrome2.downloads.onCreated.__fire(makeDownloadItem({ url: 'https://example.com/offline.zip' }));
+  chrome2.downloads.onCreated.__fire(makeDownloadItem({ url: fileUrl(stub, 'offline.zip') }));
   await wait(400);
   assert.equal(chrome2.__callsOf('downloads.cancel').length, 0);
   const notes = chrome2.__callsOf('notifications.create');
@@ -153,7 +173,7 @@ test('并发重复项只转发一次', async () => {
   const chrome = bootChrome(stub);
   try {
     await bootWorker(chrome);
-    const item = makeDownloadItem({ id: 1, url: 'https://example.com/dup.zip' });
+    const item = makeDownloadItem({ id: 1, url: fileUrl(stub, 'dup.zip') });
     chrome.downloads.onCreated.__fire({ ...item });
     chrome.downloads.onCreated.__fire({ ...item, id: 2 });
     assert.equal(await waitFor(() => stub.downloads().length >= 1), true);
@@ -169,14 +189,15 @@ test('SW 重启后仍能挡住同一链接的重复转发', async () => {
   const stub = await startStub();
   const chrome1 = bootChrome(stub);
   await bootWorker(chrome1);
-  chrome1.downloads.onCreated.__fire(makeDownloadItem({ id: 11, url: 'https://example.com/keep.zip' }));
+  const keep = fileUrl(stub, 'keep.zip');
+  chrome1.downloads.onCreated.__fire(makeDownloadItem({ id: 11, url: keep }));
   assert.equal(await waitFor(() => stub.downloads().length === 1), true);
   await wait(100);
 
   // 用同一份 storage.session 模拟 SW 被回收后重新拉起
   const chrome2 = bootChrome(stub, { session: chrome1.storage.session.data });
   await bootWorker(chrome2);
-  chrome2.downloads.onCreated.__fire(makeDownloadItem({ id: 12, url: 'https://example.com/keep.zip' }));
+  chrome2.downloads.onCreated.__fire(makeDownloadItem({ id: 12, url: keep }));
   await wait(300);
   assert.equal(stub.downloads().length, 1, '重启后重复转发了');
   assert.equal(chrome2.__callsOf('downloads.cancel').length, 1, '重复项应被静默取消');
@@ -226,7 +247,7 @@ test('关闭自动接管（客户端口径）后不拦截，但右键手动发�
   }
 });
 
-test('右键菜单创建两个入口（含页面级）', async () => {
+test('右键菜单创建三个入口（下载 / 不接管 / 页面级）', async () => {
   const stub = await startStub();
   const chrome = bootChrome(stub);
   try {
@@ -234,9 +255,13 @@ test('右键菜单创建两个入口（含页面级）', async () => {
     chrome.runtime.onInstalled.__fire({ reason: 'install' });
     await wait(150);
     const created = chrome.__callsOf('menus.create').map((c) => c.args[0]);
-    assert.equal(created.length, 2);
+    assert.equal(created.length, 3);
     assert.deepEqual(created[0].contexts, ['link', 'image', 'audio', 'video']);
-    assert.equal(created[1].contexts.includes('page'), true);
+    assert.match(created[0].title, /海兔下载器/);
+    assert.equal(created[1].id, 'kokona-browser');
+    assert.match(created[1].title, /浏览器/);
+    assert.deepEqual(created[1].contexts, ['link', 'image', 'audio', 'video']);
+    assert.equal(created[2].contexts.includes('page'), true);
     // 安装后应打开引导页
     assert.equal(chrome.__callsOf('tabs.create').length, 1);
   } finally {
@@ -251,7 +276,7 @@ test('已带建议文件名的新下载仍要接管（filename 不能当回放�
     await bootWorker(chrome);
     chrome.downloads.onCreated.__fire(makeDownloadItem({
       id: 51,
-      url: 'https://example.com/named.zip',
+      url: fileUrl(stub, 'named.zip'),
       filename: 'C:////Users////x////Downloads////named.zip',
     }));
     assert.equal(await waitFor(() => stub.downloads().length === 1), true, '带文件名的正常下载被误杀了');
@@ -283,7 +308,7 @@ test('本地关闭但客户端开启：仍按客户端接管', async () => {
   });
   try {
     await bootWorker(chrome);
-    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 62, url: 'https://example.com/c2.zip' }));
+    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 62, url: fileUrl(stub, 'c2.zip') }));
     assert.equal(await waitFor(() => stub.downloads().length === 1), true, '客户端说开启，却没有接管');
     assert.equal(await waitFor(() => chrome.__callsOf('downloads.cancel').length === 1), true);
   } finally {
@@ -296,9 +321,9 @@ test('设置查询有缓存：连续下载只查一次', async () => {
   const chrome = bootChrome(stub);
   try {
     await bootWorker(chrome);
-    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 63, url: 'https://example.com/k1.zip' }));
+    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 63, url: fileUrl(stub, 'k1.zip') }));
     await waitFor(() => stub.downloads().length === 1);
-    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 64, url: 'https://example.com/k2.zip' }));
+    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 64, url: fileUrl(stub, 'k2.zip') }));
     await waitFor(() => stub.downloads().length === 2);
     assert.equal(stub.settingsCalls(), 1, `设置被查询了 ${stub.settingsCalls()} 次，缓存没生效`);
   } finally {
@@ -312,7 +337,7 @@ test('客户端不可达：退回本地设置，且不取消浏览器下载', as
   await bootWorker(chrome);
   await stub.close();   // 先关掉，制造离线
 
-  chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 65, url: 'https://example.com/off.zip' }));
+  chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 65, url: fileUrl(stub, 'off.zip') }));
   await wait(800);
   assert.equal(chrome.__callsOf('downloads.cancel').length, 0, '离线时绝不能取消浏览器下载');
   const notes = chrome.__callsOf('notifications.create');
@@ -324,8 +349,84 @@ test('409 视为已存在：取消浏览器下载但不提示失败', async () =
   const chrome = bootChrome(stub);
   try {
     await bootWorker(chrome);
-    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 41, url: 'https://example.com/dup409.zip' }));
+    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 41, url: fileUrl(stub, 'dup409.zip') }));
     assert.equal(await waitFor(() => stub.downloads().length === 1), true);
+    assert.equal(await waitFor(() => chrome.__callsOf('downloads.cancel').length === 1), true);
+  } finally {
+    await stub.close();
+  }
+});
+
+/* ---------------- 不支持分段的链接 / 「不接管」菜单 ---------------- */
+
+test('服务器忽略 Range（200）时不接管，保留浏览器下载并提示', async () => {
+  const stub = await startStub({ rangeSupport: false });
+  const chrome = bootChrome(stub);
+  try {
+    await bootWorker(chrome);
+    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 71, url: fileUrl(stub, 'norange.zip') }));
+    await wait(500);
+    assert.equal(stub.downloads().length, 0, '不支持分段的链接不该转发给客户端');
+    assert.equal(chrome.__callsOf('downloads.cancel').length, 0, '必须保留浏览器自己的下载');
+    const notes = chrome.__callsOf('notifications.create');
+    assert.equal(notes.length >= 1, true);
+    assert.match(notes[0].args[0].message, /不支持多线程/);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('Range 探测无法判断时照常接管（不误伤）', async () => {
+  const stub = await startStub();
+  const chrome = bootChrome(stub);
+  try {
+    await bootWorker(chrome);
+    // 端口 1 没人监听：探测失败 → unknown → 维持接管
+    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 72, url: 'http://127.0.0.1:1/unknown.zip' }));
+    assert.equal(await waitFor(() => stub.downloads().length === 1), true, '探测失败时不该放弃接管');
+    assert.equal(await waitFor(() => chrome.__callsOf('downloads.cancel').length === 1), true);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('右键「用浏览器下载（不接管）」：交给浏览器且不转发', async () => {
+  const stub = await startStub();
+  const chrome = bootChrome(stub);
+  try {
+    await bootWorker(chrome);
+    const url = fileUrl(stub, 'browser.zip');
+    chrome.contextMenus.onClicked.__fire({ menuItemId: 'kokona-browser', linkUrl: url }, { url: 'https://example.com/p' });
+
+    assert.equal(await waitFor(() => chrome.__callsOf('downloads.download').length === 1), true, '没有调用浏览器下载');
+    assert.equal(chrome.__callsOf('downloads.download')[0].args[0].url, url);
+
+    // 浏览器随后才会触发 onCreated：一次性放行，既不转发也不取消
+    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 81, url }));
+    await wait(500);
+    assert.equal(stub.downloads().length, 0, '「不接管」的链接被转发了');
+    assert.equal(chrome.__callsOf('downloads.cancel').length, 0, '「不接管」的链接被取消了');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('「不接管」只放行一次：同链接的新下载仍会被接管', async () => {
+  const stub = await startStub();
+  const chrome = bootChrome(stub);
+  try {
+    await bootWorker(chrome);
+    const url = fileUrl(stub, 'once.zip');
+    chrome.contextMenus.onClicked.__fire({ menuItemId: 'kokona-browser', linkUrl: url }, { url: 'https://example.com/p' });
+    assert.equal(await waitFor(() => chrome.__callsOf('downloads.download').length === 1), true);
+
+    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 82, url }));
+    await wait(400);
+    assert.equal(stub.downloads().length, 0, '放行项被转发了');
+
+    // 用户之后又下了一次同一个链接：这次应该正常接管
+    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 83, url }));
+    assert.equal(await waitFor(() => stub.downloads().length === 1), true, '放行名单没有被消费掉');
     assert.equal(await waitFor(() => chrome.__callsOf('downloads.cancel').length === 1), true);
   } finally {
     await stub.close();

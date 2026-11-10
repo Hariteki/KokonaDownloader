@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   isSupportedUrl, urlKey, baseName, normalizeSettings, baseUrl, isOwnApiUrl,
   buildHeaders, buildPayload, mapDownloadResponse, isFreshDownload, shouldCapture,
+  classifyRangeProbe, probeNotice,
 } from '../lib/logic.js';
 
 test('isSupportedUrl 只接受 http/https/ftp', () => {
@@ -104,4 +105,20 @@ test('shouldCapture 组合判定', () => {
   assert.equal(shouldCapture(item, { ...settings, autoCapture: false }, Date.now() - 60000), false);
   assert.equal(shouldCapture({ ...item, url: 'blob:x' }, settings, Date.now() - 60000), false);
   assert.equal(shouldCapture({ ...item, url: 'http://127.0.0.1:16800/api/download' }, settings, Date.now() - 60000), false);
+});
+
+test('classifyRangeProbe：206 支持，200/416 不支持，其余未知', () => {
+  assert.equal(classifyRangeProbe(206), 'yes');
+  assert.equal(classifyRangeProbe(200), 'no');
+  assert.equal(classifyRangeProbe(416), 'no');
+  assert.equal(classifyRangeProbe(403), 'unknown');
+  assert.equal(classifyRangeProbe(404), 'unknown');
+  assert.equal(classifyRangeProbe(503), 'unknown');
+  assert.equal(classifyRangeProbe(0), 'unknown');
+});
+
+test('probeNotice 只对明确不支持给出提示', () => {
+  assert.match(probeNotice('no'), /不支持多线程/);
+  assert.equal(probeNotice('yes'), '');
+  assert.equal(probeNotice('unknown'), '');
 });

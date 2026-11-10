@@ -5,16 +5,20 @@
 
 import {
   buildPayload, mapDownloadResponse, shouldCapture, normalizeSettings, urlKey, baseUrl,
+  probeNotice,
 } from '../lib/logic.js';
 import { ping, verifyKey, postDownload } from '../lib/api.js';
 import {
   loadSettings, saveSettings, getSessionStart, recentForwards, markForwarded,
+  addBypass, consumeBypass,
 } from '../lib/settings.js';
 import { collectSession, hasHostAccess, requestHostAccess } from '../lib/cookies.js';
 import { resolveAutoCapture, invalidateInterceptCache } from '../lib/intercept.js';
 import { syncForceAttachment } from '../lib/dnr.js';
+import { probeRangeSupport } from '../lib/probe.js';
 
 const MENU_DOWNLOAD = 'kokona-download';
+const MENU_BROWSER = 'kokona-browser';
 const MENU_PAGE = 'kokona-download-page';
 const RECENT_WINDOW_MS = 5 * 60 * 1000;
 
@@ -54,6 +58,11 @@ async function setupMenus() {
       contexts: ['link', 'image', 'audio', 'video'],
     });
     chrome.contextMenus.create({
+      id: MENU_BROWSER,
+      title: '用浏览器下载（不接管）',
+      contexts: ['link', 'image', 'audio', 'video'],
+    });
+    chrome.contextMenus.create({
       id: MENU_PAGE,
       title: '用海兔下载本页所有链接',
       contexts: ['page', 'selection'],
@@ -65,10 +74,26 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === MENU_DOWNLOAD) {
     const url = info.linkUrl || info.srcUrl;
     if (url) manualSend(url, tab && tab.url);
+  } else if (info.menuItemId === MENU_BROWSER) {
+    const url = info.linkUrl || info.srcUrl;
+    if (url) browserDownload(url);
   } else if (info.menuItemId === MENU_PAGE) {
     collectPageLinks(tab);
   }
 });
+
+/**
+ * 「不接管」：先把这个链接记入一次性放行名单，再交给浏览器下载。
+ * 必须"先记再下"——onCreated 可能同步于 download() 的 Promise 之前到达。
+ */
+async function browserDownload(url) {
+  await addBypass(urlKey(url));
+  try {
+    await chrome.downloads.download({ url, conflictAction: 'uniquify' });
+  } catch (e) {
+    notify('海兔下载器', '浏览器无法下载该链接：' + (e && e.message ? e.message : e));
+  }
+}
 
 /** 右键手动发送：不判定 autoCapture，用户点了就是要下。 */
 async function manualSend(url, referrer) {
@@ -145,6 +170,9 @@ async function handleCreated(item) {
   if (!shouldCapture(item, { ...settings, autoCapture: intercept.enabled }, sessionStart)) return;
 
   const key = urlKey(item.url);
+  // 用户右键选了「用浏览器下载（不接管）」：一次性放行，既不转发也不取消
+  if (await consumeBypass(key)) return;
+
   // has 与 add 必须在同一个微任务里（中间不能有 await），否则两个并发项会同时通过检查
   if (inFlight.has(key)) { await cancelAndErase(item.id); return; }
   inFlight.add(key);
@@ -157,6 +185,15 @@ async function handleCreated(item) {
     }
 
     const session = await collectSession(item.url);
+
+    // 明确不支持分段（忽略 Range / 416）就留给浏览器：客户端拿过去也只能单连接跑，
+    // 反而丢掉浏览器的续传与断点提示。探测失败（'unknown'）时维持原有接管行为。
+    const verdict = await probeRangeSupport(item.url);
+    if (verdict === 'no') {
+      notify('海兔下载器', probeNotice(verdict));
+      return;
+    }
+
     const payload = buildPayload({ url: item.url, referrer: item.referrer, session });
     const { status, body } = await postDownload(baseUrl(settings), settings.secret, payload);
     const mapped = mapDownloadResponse(status, body);

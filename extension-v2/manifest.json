@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "海兔下载器",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5QmG5caijoT0qwxzJWtBVC3IX032+a95f87Si3NysvqpdeyiC+eJZe4CZkv69PJuLtPZwHRskhGKzbaWjrEqWvMFKluVG/oYhXY0l2eY9/+PsVp7yNpBnxistFxAN6D2XgtDFhYGBL9NBgI5fmr1JVVl8RN5H///L8O/YjQwEUG4HbJAZMWeAW8Jepy3stEAhsf1P1fvCvS5bErO28vQwzFm/dCV6qOnCaZSWIdTbyLwNEW8hnp6lcuFdaEjkf0VllRA7vmzU4/3z6HLuuTwMpc6yHRFM9SUzFP/C8jAy+PIkU6U/iJclJSut7ZeEXek89Rq1qoT1Hwr61SlECjEtQIDAQAB",
   "description": "把浏览器的下载交给海兔下载器桌面客户端：多线程分段、断点续传。",
   "minimum_chrome_version": "102",

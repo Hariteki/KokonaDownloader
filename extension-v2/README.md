@@ -54,6 +54,23 @@ node tools/pack_extension.mjs --for-store
 | 扩展弹窗/设置 | 自动接管浏览器下载 | 客户端不可达时的本地兜底 |
 | 扩展设置 | 把网页内联文件改为下载（实验） | 默认关。见下 |
 
+### 不支持多线程的链接
+
+接管前扩展会对目标地址发一个 `Range: bytes=0-1` 的探测请求（读到响应头就断开）：
+
+- **206**：真的兑现区间请求 → 照常接管，客户端可以分段多线程
+- **200 / 416**：明确不支持分段（含"声明支持但不兑现"的服务器）→ **不接管**，浏览器下载继续，
+  并弹一条提示。客户端拿过去也只能单连接跑，不如留给浏览器
+- **探测失败/超时**（3 秒，或没有站点权限）：无法判断 → 维持原行为，照常接管，避免误伤
+
+### 右键「用浏览器下载（不接管）」
+
+链接/图片/音视频的右键菜单里有这一项。点它不做任何探测，直接把地址记入一次性放行名单
+（`storage.session`，5 分钟过期、命中即消费），再调用浏览器原生下载；随后触发的
+`downloads.onCreated` 会被放行——既不转发，也不取消。
+
+同一个链接之后再下一次，仍会按正常规则接管。
+
 ### 强制附件（实验）
 
 `downloads.onCreated` 只在浏览器**已经决定下载**时触发。PDF、压缩包这类响应浏览器会直接
@@ -70,7 +87,7 @@ node tools/pack_extension.mjs --for-store
 | 权限 | 用途 |
 | --- | --- |
 | `downloads` | 接住浏览器下载、失败时保留原生下载 |
-| `contextMenus` | 右键「使用海兔下载器下载」「下载本页所有链接」 |
+| `contextMenus` | 右键「使用海兔下载器下载」「用浏览器下载（不接管）」「下载本页所有链接」 |
 | `storage` | 保存客户端地址与密钥；会话起点用于挡历史回放 |
 | `clipboardRead` | 「粘贴密钥并连接」按钮读取剪贴板里的密钥 |
 | `scripting` + `activeTab` | 「下载本页所有链接」按需注入，不常驻 content script |
@@ -92,6 +109,7 @@ node tools/pack_extension.mjs --for-store
 - **拿不到 `Authorization` 头**。MV3 没有 `webRequestBlocking`，JS 里用 `fetch` 带的
   Bearer token 无法捕获；这类站点只能靠 Cookie。
 - **强制附件按 URL 扩展名判断**，`?file=123` 这种不带扩展名的地址无效（DNR 不能按 Content-Type 条件）。
+- **接管前多一次探测请求**。只读响应头，正文不落盘；没有站点权限时探测直接失败并按"无法判断"处理。
 - **服务器不给校验器、长度又恰好不变**时，客户端无法识别"文件被换过"，属协议层面无解。
 - 不做媒体嗅探（m3u8 / `<video>` 里的流）。那是独立项目，不是扩展改造。
 
@@ -102,7 +120,7 @@ node tools/pack_extension.mjs --for-store
 ```bash
 cd extension-v2
 
-# 纯逻辑 + SW 级联调（38 条，真实 HTTP 服务，不依赖浏览器）
+# 纯逻辑 + SW 级联调（44 条，真实 HTTP 服务，不依赖浏览器）
 node --test test/logic.test.mjs test/force-attachment.test.mjs test/sw.test.mjs
 ```
 
@@ -127,9 +145,10 @@ node --test test/logic.test.mjs test/force-attachment.test.mjs test/sw.test.mjs
 extension-v2/
   manifest.json
   sw/background.js        事件路由与副作用（不含业务判定）
-  lib/logic.js            纯函数：URL 判定 / 去重键 / 载荷组装 / 状态码映射
+  lib/logic.js            纯函数：URL 判定 / 去重键 / 载荷组装 / 状态码映射 / Range 判定
+  lib/probe.js            Range 能力嗅探（只读响应头，读完即断）
   lib/api.js              fetch 封装（超时 / 密钥 / 错误码）
-  lib/settings.js         设置读写与会话起点
+  lib/settings.js         设置读写、会话起点与一次性放行名单
   lib/cookies.js          Cookie / UA / 语言采集，可选权限申请
   lib/intercept.js        「以客户端为准」的拦截开关 + 短缓存
   lib/force-attachment.js DNR 规则的纯逻辑（扩展名清单 / 正则 / 生效条件）
