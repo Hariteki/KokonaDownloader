@@ -99,14 +99,18 @@ public sealed class TrayMenuHost
     private static void ForceForeground(nint hwnd)
     {
         if (hwnd == nint.Zero) return;
-        var current = GetForegroundWindow();
-        if (current == hwnd) return;
-
-        uint currentThread = GetCurrentThreadId();
-        uint foregroundThread = current == nint.Zero ? 0 : GetWindowThreadProcessId(current, out _);
+        uint currentThread = 0;
+        uint foregroundThread = 0;
         bool attached = false;
+        // 整段都包在 try 里：这里全是 P/Invoke，任何一处签名/库名写错都会抛
+        // EntryPointNotFoundException。托盘菜单绝不能因此把整个应用带崩。
         try
         {
+            var current = GetForegroundWindow();
+            if (current == hwnd) return;
+
+            currentThread = GetCurrentThreadId();
+            foregroundThread = current == nint.Zero ? 0 : GetWindowThreadProcessId(current, out _);
             if (foregroundThread != 0 && foregroundThread != currentThread)
                 attached = AttachThreadInput(currentThread, foregroundThread, true);
             SetForegroundWindow(hwnd);
@@ -340,7 +344,9 @@ public sealed class TrayMenuHost
     [DllImport("user32.dll")]
     private static extern nint CallNextHookEx(nint hhk, int nCode, nint wParam, nint lParam);
 
-    [DllImport("user32.dll")]
+    // GetCurrentThreadId 属于 kernel32，不是 user32。写错 DLL 会在真机运行时抛
+    // EntryPointNotFoundException（声明存在、编译通过，只有真调用才炸）。
+    [DllImport("kernel32.dll")]
     private static extern uint GetCurrentThreadId();
 
     [DllImport("user32.dll")]
