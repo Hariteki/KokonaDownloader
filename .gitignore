@@ -34,3 +34,6 @@ screenshot/diag_*.png
 # files/ 是历史测试夹具（78 MB，全仓无任何脚本引用），infohash.txt 是 BT 测试的一次性产物。
 files/
 infohash.txt
+
+# 本地临时产物（打包暂存、打点副本、基准输出）
+artifacts/
