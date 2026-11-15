@@ -1396,7 +1396,7 @@ public sealed class DownloadEngine : IAsyncDisposable
             var idmMeta = _store.GetMeta(gid);
             bool inHistory = _history.ContainsKey(gid);
             if (!inPool && idmMeta is null && !inHistory)
-                throw new InvalidOperationException($"任务 {gid} 不存在");
+                throw new TaskNotFoundException(gid);
 
             if (deleteFile && !inPool)
             {

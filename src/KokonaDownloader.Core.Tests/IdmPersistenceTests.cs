@@ -66,9 +66,11 @@ public sealed class IdmPersistenceTests
         try
         {
             await engine.StartAsync();
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            // 要的是"必须抛"，不是"必须抛某个精确类型"：删除现在抛的是更具体的
+            // TaskNotFoundException（界面靠它把重复删除当成功），它继承自 InvalidOperationException。
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(
                 () => engine.PauseAsync("idm-99999999999999999"));
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(
                 () => engine.RemoveAsync("idm-99999999999999999"));
         }
         finally

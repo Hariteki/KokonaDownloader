@@ -1009,6 +1009,7 @@ public partial class MainWindow : Window, IDisposable
             foreach (var vm in list)
             {
                 try { await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile: false); }
+                catch (TaskNotFoundException) { /* 已经没了：同样算删掉 */ }
                 catch (Exception ex) { failed++; App.Log($"[ui] 删除任务 {vm.Gid} 失败: {ex.Message}"); }
             }
             // 全部成功才清选择；有失败则保留选中，便于用户重试
@@ -1103,9 +1104,14 @@ public partial class MainWindow : Window, IDisposable
         });
         if (result != ContentDialogResult.Primary || App.Host?.Engine == null) return;
         try { await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile: false); }
+        catch (TaskNotFoundException)
+        {
+            // 连点两次、或别处刚把这一行删掉：结果就是"没了"，不是失败，别再弹一次错
+            App.Log($"[ui] 删除任务 {vm.Gid} 时它已经不存在（按成功处理）");
+        }
         catch (Exception ex)
         {
-            // 删除失败必须让用户看见：之前只写日志，表现是"点了没反应"，排查了两周
+            // 真失败必须让用户看见：之前只写日志，表现是"点了没反应"，排查了两周
             App.Log($"[ui] 删除任务失败: {ex.Message}");
             await ShowErrorAsync("删除失败", ex.Message);
         }

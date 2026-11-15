@@ -291,6 +291,19 @@ public sealed class Aria2RpcException : Exception
     public Aria2RpcException(int code, string message) : base($"aria2 RPC 错误 [{code}]: {message}") => Code = code;
 }
 
+/// <summary>
+/// 任务不存在（删除时最常见）。
+///
+/// 与"操作失败"刻意区分开：删除是幂等动作，界面上"连点两次删除"或"轮询刚把行清掉"
+/// 都会走到这里，调用方应当把它当成功处理，而不是弹一个"删除失败"。
+/// 字符串匹配太脆，所以给一个独立类型。
+/// </summary>
+public sealed class TaskNotFoundException : InvalidOperationException
+{
+    public string Gid { get; }
+    public TaskNotFoundException(string gid) : base($"任务 {gid} 不存在") => Gid = gid;
+}
+
 /// <summary>添加重复任务（同 infohash 的种子任务已存在）时抛出，Message 为可直接展示的友好文案。</summary>
 public sealed class DuplicateTaskException : Exception
 {

@@ -316,6 +316,19 @@ public class ApiServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task 删除不存在的任务仍返回400()
+    {
+        // 界面会把"任务不存在"当成功（重复点击），但 **HTTP 层不能**放宽：
+        // 打错 gid 的调用方必须能看出来，不然"删了个空气"也会收到 200。
+        var resp = await _http.SendAsync(Authed(HttpMethod.Post, "/api/tasks/idm-19700101000000001/remove", new { }));
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        // 响应体里的中文是 \uXXXX 转义的，别直接对着原始 JSON 找中文
+        using var doc = System.Text.Json.JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        Assert.Equal("task_action_failed", doc.RootElement.GetProperty("error").GetString());
+        Assert.Contains("不存在", doc.RootElement.GetProperty("message").GetString() ?? "");
+    }
+
+    [Fact]
     public async Task 清空任务列表接口_返回条数且列表变空()
     {
         _fileServer.AddFile("clear.bin", new byte[4096]);

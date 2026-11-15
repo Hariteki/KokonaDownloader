@@ -80,8 +80,10 @@ public class TaskRemovalTests
             store.AddMeta(gid, FinishedIdmMeta(gid, work));
 
             await engine.RemoveAsync(gid);
-            // 真的不存在的 gid 仍要报错：否则 API 会把"删了个空气"当成成功
-            await Assert.ThrowsAsync<InvalidOperationException>(() => engine.RemoveAsync(gid));
+            // 真的不存在的 gid 仍要报错：否则 API 会把"删了个空气"当成成功。
+            // 但必须是 TaskNotFoundException 这个具体类型——界面靠它把"连点两次"当成成功，
+            // 不能靠比字符串（文案一改就废）。
+            await Assert.ThrowsAsync<TaskNotFoundException>(() => engine.RemoveAsync(gid));
         }
         finally { try { Directory.Delete(work, true); } catch { } }
     }
