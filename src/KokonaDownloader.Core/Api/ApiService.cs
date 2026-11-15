@@ -341,6 +341,14 @@ public sealed class ApiService : IDisposable
                 return;
         }
 
+        // 清空任务列表（对应界面的「清除列表」）：只清记录，不删已下载的文件
+        if (req.HttpMethod == "POST" && path == "/api/tasks/clear")
+        {
+            int removed = await _engine.ClearAllAsync().ConfigureAwait(false);
+            await WriteJson(ctx, 200, new { ok = true, removed }).ConfigureAwait(false);
+            return;
+        }
+
         // 任务操作 /api/tasks/{gid}/{action}
         var m = System.Text.RegularExpressions.Regex.Match(path, @"^/api/tasks/([0-9a-fA-F]+|idm-[0-9]+)/(pause|resume|remove|redownload)$");
         if (m.Success && req.HttpMethod == "POST")

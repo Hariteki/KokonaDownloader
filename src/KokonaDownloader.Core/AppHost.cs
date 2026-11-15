@@ -41,6 +41,8 @@ public sealed class AppHost : IAsyncDisposable
         Notified = new NotifiedStore(AppPaths.NotifiedFile);
         _cachedTrackers = LoadCachedTrackers();
         Engine = new DownloadEngine(BuildEngineConfig(), TaskStore, Log);
+        // 清除"任务已删除、断点还在"的孤儿文件（只清 24h 以前的）
+        try { Engine.SweepOrphanParts(); } catch (Exception ex) { Log($"[app] 清理孤儿断点失败: {ex.Message}"); }
         Api = new ApiService(Engine, Settings, settings.Current.ApiPort, Log);
 
         // 引擎启动时已通过 EngineConfig 拿到这些值，记下来作为"已下发"基线，

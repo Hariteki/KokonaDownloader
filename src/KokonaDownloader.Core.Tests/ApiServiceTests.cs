@@ -314,4 +314,31 @@ public class ApiServiceTests : IAsyncLifetime
         var resp = await _http.SendAsync(Authed(HttpMethod.Get, "/api/nope"));
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
+
+    [Fact]
+    public async Task 清空任务列表接口_返回条数且列表变空()
+    {
+        _fileServer.AddFile("clear.bin", new byte[4096]);
+        var add = await _http.SendAsync(Authed(HttpMethod.Post, "/api/download",
+            new { url = _fileServer.Url("clear.bin") }));
+        Assert.Equal(HttpStatusCode.OK, add.StatusCode);
+
+        // 等它进列表（下载本身不要求完成：清空要能把活动任务一起收掉）
+        var gid = System.Text.Json.JsonDocument.Parse(await add.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("gid").GetString();
+        Assert.False(string.IsNullOrEmpty(gid));
+        await Task.Delay(600);
+
+        var clear = await _http.SendAsync(Authed(HttpMethod.Post, "/api/tasks/clear", new { }));
+        Assert.Equal(HttpStatusCode.OK, clear.StatusCode);
+        var body = await clear.Content.ReadAsStringAsync();
+        using var doc = System.Text.Json.JsonDocument.Parse(body);
+        Assert.True(doc.RootElement.GetProperty("ok").GetBoolean());
+        Assert.True(doc.RootElement.GetProperty("removed").GetInt32() >= 1, body);
+
+        var list = await _http.SendAsync(Authed(HttpMethod.Get, "/api/tasks"));
+        Assert.Equal(HttpStatusCode.OK, list.StatusCode);
+        var json = await list.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("clear.bin", json);
+    }
 }

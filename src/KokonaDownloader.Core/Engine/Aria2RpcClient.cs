@@ -250,6 +250,10 @@ public sealed class Aria2RpcClient : IDisposable
     public async Task RemoveAsync(string gid, CancellationToken ct = default)
         => await CallAsync("aria2.remove", new object?[] { gid }, ct).ConfigureAwait(false);
 
+    /// <summary>一次性清掉 aria2 里全部 stopped 结果（清空任务列表用）。</summary>
+    public async Task PurgeDownloadResultAsync(CancellationToken ct = default)
+        => await CallAsync("aria2.purgeDownloadResult", ct: ct).ConfigureAwait(false);
+
     public async Task RemoveDownloadResultAsync(string gid, CancellationToken ct = default)
         => await CallAsync("aria2.removeDownloadResult", new object?[] { gid }, ct).ConfigureAwait(false);
 

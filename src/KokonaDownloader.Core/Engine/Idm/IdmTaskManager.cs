@@ -396,18 +396,80 @@ public sealed class IdmTaskManager : IAsyncDisposable
     public bool Remove(string gid, bool deleteFile)
     {
         if (!_tasks.TryRemove(gid, out var e)) return false;
+        bool running = e.State == IdmTaskState.Active;
         e.Cts?.Cancel();
+
+        // 正在下载的任务此刻还握着 .kdpart 句柄：直接删会静默失败（Windows 不允许删除被占用的文件），
+        // 于是列表里没了、盘上却留下几十 MB 的孤儿断点——实测清空一个 16MB 任务就漏 16MB。
+        // 这类任务等 runner 退出、句柄释放后再删。
+        if (running)
+        {
+            _ = CleanupAfterRemovalAsync(e, deleteFile);
+            return true;
+        }
+
+        DeleteFilesNow(e, deleteFile);
+        return true;
+    }
+
+    private async Task CleanupAfterRemovalAsync(Entry e, bool deleteFile)
+    {
+        try { if (e.Runner is { } r) await r.ConfigureAwait(false); } catch { /* 取消导致的异常忽略 */ }
+        DeleteFilesNow(e, deleteFile);
+    }
+
+    /// <summary>删除用户文件（可选）与任务私有的断点/状态文件。</summary>
+    private void DeleteFilesNow(Entry e, bool deleteFile)
+    {
         if (deleteFile && !string.IsNullOrEmpty(e.Info.FilePath))
         {
-            try { if (File.Exists(e.Info.FilePath)) File.Delete(e.Info.FilePath); } catch { }
+            try { if (File.Exists(e.Info.FilePath)) File.Delete(e.Info.FilePath); }
+            catch (Exception ex) { _log($"[idm] 删除文件失败 {e.Info.FilePath}: {ex.Message}"); }
         }
         // 断点与状态文件属于任务私有数据：任务被删掉后不该继续占着磁盘
-        string part = PartPath(gid, e.Info.Dir);
-        try { if (File.Exists(part)) File.Delete(part); } catch { }
+        string part = PartPath(e.Gid, e.Info.Dir);
+        try { if (File.Exists(part)) File.Delete(part); }
+        catch (Exception ex) { _log($"[idm] 删除断点失败 {part}: {ex.Message}"); }
         try { if (File.Exists(part + ".state.json")) File.Delete(part + ".state.json"); } catch { }
         // 跨卷时断点放在目标盘的隐藏目录里，空了就一起收掉
         IdmHttpDownloader.TryRemoveEmptyDirectory(Path.GetDirectoryName(part) ?? "");
-        return true;
+    }
+
+    /// <summary>
+    /// 启动时清理孤儿断点：磁盘上有 .kdpart、但 tasks.json 里已经没有对应任务。
+    ///
+    /// 这些是"下载中被删除/清空"留下的（旧版本删除时文件还被占着，删不掉），
+    /// 一个 16MB 的任务就漏 16MB，日积月累很可观。启动时没有任务在跑，删除是安全的。
+    /// </summary>
+    public int SweepOrphanParts(IEnumerable<TaskMeta> known, TimeSpan? minAge = null)
+    {
+        var alive = new HashSet<string>(known.Select(m => m.Gid), StringComparer.Ordinal);
+        alive.UnionWith(_tasks.Keys);
+        // 只清"足够旧"的：万一元数据因崩溃没落盘，当天刚下的断点还要留给用户续传
+        var cutoff = DateTime.UtcNow - (minAge ?? TimeSpan.FromHours(24));
+        int removed = 0;
+        try
+        {
+            if (!Directory.Exists(_partsDir)) return 0;
+            foreach (var f in Directory.EnumerateFiles(_partsDir, "idm-*.kdpart*"))
+            {
+                string name = Path.GetFileName(f);
+                int dot = name.IndexOf(".kdpart", StringComparison.Ordinal);
+                string gid = dot > 0 ? name[..dot] : "";
+                if (gid.Length == 0 || alive.Contains(gid)) continue;
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(f) > cutoff) continue;
+                    long size = new FileInfo(f).Length;
+                    File.Delete(f);
+                    if (name.EndsWith(".kdpart", StringComparison.Ordinal)) removed++;
+                    _log($"[idm] 已清理孤儿断点 {name}（{size / 1024 / 1024} MB）");
+                }
+                catch (Exception ex) { _log($"[idm] 清理孤儿断点失败 {name}: {ex.Message}"); }
+            }
+        }
+        catch (Exception ex) { _log($"[idm] 扫描孤儿断点失败: {ex.Message}"); }
+        return removed;
     }
 
     /// <summary>

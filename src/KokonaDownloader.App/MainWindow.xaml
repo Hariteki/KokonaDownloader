@@ -662,6 +662,18 @@
                 <AutoSuggestBox x:Name="SearchBox" PlaceholderText="搜索"
                                 QueryIcon="Find" Width="200" MinWidth="120" VerticalAlignment="Center"
                                 CornerRadius="8" TextChanged="OnSearchTextChanged"/>
+                <!-- 放在右侧自动列：左列要容下 5 个筛选页签 + 筛选菜单，窄窗口下会把文字裁掉（实测 940px 只剩"清除"） -->
+                <Border Width="1" Height="16" VerticalAlignment="Center"
+                        Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                <Button x:Name="BtnClearAll" Click="OnClearAllClick"
+                        ToolTipService.ToolTip="清除任务列表（只清记录，不删除文件）"
+                        AutomationProperties.Name="清除任务列表"
+                        Background="Transparent" BorderThickness="0" Padding="8,2" MinHeight="28">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <FontIcon Glyph="&#xE74D;" FontSize="13"/>
+                        <TextBlock Text="清除列表" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </Button>
             </StackPanel>
         </Grid>
 
@@ -707,7 +719,7 @@
                                 <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemOpenClick" ToolTipService.ToolTip="打开文件夹">
                                     <FontIcon Glyph="&#xE8DA;" FontSize="15"/>
                                 </Button>
-                                <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemDeleteClick" ToolTipService.ToolTip="删除">
+                                <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemDeleteClick" ToolTipService.ToolTip="删除" AutomationProperties.Name="删除任务">
                                     <FontIcon Glyph="&#xE74D;" FontSize="15"/>
                                 </Button>
                             </StackPanel>
@@ -795,7 +807,7 @@
                                     <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemOpenClick" ToolTipService.ToolTip="打开文件夹">
                                         <FontIcon Glyph="&#xE8DA;" FontSize="15"/>
                                     </Button>
-                                    <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemDeleteClick" ToolTipService.ToolTip="删除">
+                                    <Button Width="34" Height="34" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" Click="OnItemDeleteClick" ToolTipService.ToolTip="删除" AutomationProperties.Name="删除任务">
                                         <FontIcon Glyph="&#xE74D;" FontSize="15"/>
                                     </Button>
                                 </StackPanel>

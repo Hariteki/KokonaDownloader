@@ -996,20 +996,24 @@ public partial class MainWindow : Window, IDisposable
             var result = await ShowDialogAsync(() => new ContentDialog
             {
                 Title = "批量删除",
-                Content = $"确定要删除选中的 {list.Count} 个任务吗？",
-                PrimaryButtonText = "删除任务和文件",
-                SecondaryButtonText = "仅删除任务",
+                Content = $"确定要从列表删除选中的 {list.Count} 个任务吗？已下载的文件不会被删除。",
+                PrimaryButtonText = "删除",
                 CloseButtonText = "取消",
                 DefaultButton = ContentDialogButton.Close,
                 PrimaryButtonStyle = (Style)RootGrid.Resources["DangerButtonStyle"],
                 XamlRoot = RootGrid.XamlRoot
             });
-            if (App.Host?.Engine == null || result == ContentDialogResult.None) return;
-            var deleteFile = result == ContentDialogResult.Primary;
+            if (App.Host?.Engine == null || result != ContentDialogResult.Primary) return;
+
+            int failed = 0;
             foreach (var vm in list)
-                await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile);
-            // 全部成功才清选择；中途失败保留选中，便于用户重试
-            ActiveList.SelectedItems.Clear();
+            {
+                try { await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile: false); }
+                catch (Exception ex) { failed++; App.Log($"[ui] 删除任务 {vm.Gid} 失败: {ex.Message}"); }
+            }
+            // 全部成功才清选择；有失败则保留选中，便于用户重试
+            if (failed == 0) ActiveList.SelectedItems.Clear();
+            if (failed > 0) await ShowErrorAsync("部分任务未删除", $"{failed} 个任务删除失败，其余已移除。详情见日志。");
         }
         catch (Exception ex) { App.Log($"[ui] 批量删除失败: {ex.Message}"); }
     }
@@ -1090,18 +1094,66 @@ public partial class MainWindow : Window, IDisposable
         var result = await ShowDialogAsync(() => new ContentDialog
         {
             Title = "删除任务",
-            Content = $"确定要删除“{vm.Name}”吗？",
-            PrimaryButtonText = "删除任务和文件",
-            SecondaryButtonText = "仅删除任务",
+            Content = $"确定要从列表删除“{vm.Name}”吗？已下载的文件不会被删除。",
+            PrimaryButtonText = "删除",
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Close,
             PrimaryButtonStyle = (Style)RootGrid.Resources["DangerButtonStyle"],
             XamlRoot = RootGrid.XamlRoot
         });
-        if (result == ContentDialogResult.Primary && App.Host?.Engine != null)
-            await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile: true);
-        else if (result == ContentDialogResult.Secondary && App.Host?.Engine != null)
-            await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile: false);
+        if (result != ContentDialogResult.Primary || App.Host?.Engine == null) return;
+        try { await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile: false); }
+        catch (Exception ex)
+        {
+            // 删除失败必须让用户看见：之前只写日志，表现是"点了没反应"，排查了两周
+            App.Log($"[ui] 删除任务失败: {ex.Message}");
+            await ShowErrorAsync("删除失败", ex.Message);
+        }
+    }
+
+    /// <summary>失败提示：以前这类错误只进日志，用户看到的是"点了没反应"。</summary>
+    private Task ShowErrorAsync(string title, string message) =>
+        ShowDialogAsync(() => new ContentDialog
+        {
+            Title = title,
+            Content = message,
+            CloseButtonText = "知道了",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = RootGrid.XamlRoot
+        });
+
+    /// <summary>一键清除任务列表：只清记录，不删已下载的文件。</summary>
+    private async void OnClearAllClick(object sender, RoutedEventArgs e)
+    {
+        if (App.Host?.Engine == null) return;
+        try
+        {
+            var all = await App.Host.Engine.GetAllTasksAsync();
+            if (all.Count == 0) return;
+
+            int active = all.Count(t => t.State is TaskState.Active or TaskState.Waiting);
+            var result = await ShowDialogAsync(() => new ContentDialog
+            {
+                Title = "清除任务列表",
+                Content = active > 0
+                    ? $"将移除全部 {all.Count} 条任务记录（其中 {active} 条正在下载，会被停止）。已下载的文件不会被删除。"
+                    : $"将移除全部 {all.Count} 条任务记录。已下载的文件不会被删除。",
+                PrimaryButtonText = "清除",
+                CloseButtonText = "取消",
+                DefaultButton = ContentDialogButton.Close,
+                PrimaryButtonStyle = (Style)RootGrid.Resources["DangerButtonStyle"],
+                XamlRoot = RootGrid.XamlRoot
+            });
+            if (result != ContentDialogResult.Primary) return;
+
+            int removed = await App.Host.Engine.ClearAllAsync();
+            App.Log($"[ui] 已清除任务列表: {removed} 条");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"[ui] 清除任务列表失败: {ex.Message}");
+            await ShowErrorAsync("清除失败", ex.Message);
+        }
     }
 
     private async Task ShowNewDownloadDialog(string? initialUrl = null)

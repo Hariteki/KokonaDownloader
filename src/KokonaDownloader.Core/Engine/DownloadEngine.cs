@@ -74,6 +74,29 @@ public sealed class DownloadEngine : IAsyncDisposable
     /// 由这里合成历史行，与 aria2 的实时任务合并后发布给界面与 API，两边才能继续一致。
     /// 见第八轮测试报告 §14-C 缺陷 4。</summary>
     private readonly ConcurrentDictionary<string, DownloadTaskInfo> _history = new();
+
+    /// <summary>
+    /// 刚被删除的 gid 在短时间内不许再写回本地历史。
+    ///
+    /// 轮询是"先读一份任务列表、再逐个把终态写进 _history"，用户恰好在这两步之间点删除时，
+    /// 删除清空记录之后轮询又把这条已经结束的任务写回来——而这个 gid 在 aria2/IDM 里都已经没了，
+    /// 之后再没有任何东西会来清它，于是这一行**永远删不掉**。10 秒足够覆盖一轮轮询。
+    /// </summary>
+    private readonly ConcurrentDictionary<string, long> _historySuppressedUntil = new();
+
+    private void SuppressHistory(string gid)
+    {
+        long now = Environment.TickCount64;
+        _historySuppressedUntil[gid] = now + 10_000;
+        if (_historySuppressedUntil.Count > 512)
+        {
+            foreach (var kv in _historySuppressedUntil.Where(kv => kv.Value <= now).ToList())
+                _historySuppressedUntil.TryRemove(kv.Key, out _);
+        }
+    }
+
+    private bool IsHistorySuppressed(string gid) =>
+        _historySuppressedUntil.TryGetValue(gid, out var until) && until > Environment.TickCount64;
     /// <summary>本地历史上限：超出后按完成时间丢弃最旧的行（含其持久化元数据），防止 tasks.json 无界增长。</summary>
     private const int MaxHistoryRows = 2000;
     /// <summary>本会话是否已回收过"aria2 里不存在、又没有终态快照"的失效元数据（首轮轮询后做一次）。</summary>
@@ -402,6 +425,8 @@ public sealed class DownloadEngine : IAsyncDisposable
     /// <summary>记录一条本地历史（任务结束、或隔离后改写路径时调用），并按上限修剪。</summary>
     private void RememberHistory(DownloadTaskInfo t)
     {
+        // 刚被用户删除：绝不能再写回来（见 _historySuppressedUntil 的注释）
+        if (IsHistorySuppressed(t.Gid)) return;
         _history[t.Gid] = HistorySnapshot(t);
         TrimHistory();
     }
@@ -1363,10 +1388,33 @@ public sealed class DownloadEngine : IAsyncDisposable
     {
         if (IdmTaskManager.IsIdmGid(gid))
         {
-            if (!_idm.Remove(gid, deleteFile)) throw new InvalidOperationException($"任务 {gid} 不存在");
+            // 内存池里的任务（下载中/暂停/本会话内完成的）先摘掉。
+            // 返回 false 不等于"任务不存在"：重启后已完成/失败的 IDM 任务只剩本地记录
+            // （Restore 只重建未完成的任务），这时必须继续清记录，否则这一行永远删不掉——
+            // 表现就是"点删除没反应/提示任务不存在"。真实站点复现过：重启后整列都删不动。
+            bool inPool = _idm.Remove(gid, deleteFile);
+            var idmMeta = _store.GetMeta(gid);
+            bool inHistory = _history.ContainsKey(gid);
+            if (!inPool && idmMeta is null && !inHistory)
+                throw new InvalidOperationException($"任务 {gid} 不存在");
+
+            if (deleteFile && !inPool)
+            {
+                // 历史行没有运行中的下载器，文件路径只能从记录里取
+                string? path = idmMeta?.FilePath
+                    ?? (_history.TryGetValue(gid, out var h) ? h.FilePath : null);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    try { if (File.Exists(path)) File.Delete(path); }
+                    catch (Exception ex) { _log($"删除文件失败 {path}: {ex.Message}"); }
+                }
+            }
+
             // 与 aria2 路径对齐：元数据/历史行一并清掉，否则重启后任务会从"已完成"里冒出来
+            SuppressHistory(gid);
             _store.RemoveMeta(gid);
             _history.TryRemove(gid, out _);
+            _lastStates.TryRemove(gid, out _);
             InvalidateSnapshot(); return;
         }
         Aria2TaskStatus? status = null;
@@ -1436,10 +1484,96 @@ public sealed class DownloadEngine : IAsyncDisposable
                 }
             }
         }
+        SuppressHistory(gid);
         _store.RemoveMeta(gid);
         _history.TryRemove(gid, out _); // 本地历史同步遗忘：删除后不该在下一轮又被补回列表
         _lastStates.TryRemove(gid, out _);
         InvalidateSnapshot(); // 集合已变：避免"刚删掉又立刻重下"被判成重复任务而拒收
+    }
+
+    /// <summary>
+    /// 清空任务列表：移除全部任务与本地记录，**不删除已下载的文件**。
+    /// 返回实际清掉的条数。
+    ///
+    /// 与逐个 RemoveAsync 的区别：这里不做"每个任务等 250ms×N 次清理结果"的重试，
+    /// 而是"活动的先移除、stopped 结果一次 purge"，否则几十个任务会把界面卡住十几秒。
+    /// </summary>
+    /// <summary>
+    /// 清理"任务已不存在、断点还留在盘上"的孤儿文件（旧版本删除下载中任务时会漏，一个任务漏几十 MB）。
+    ///
+    /// **只能由 AppHost 在启动时调用**：清理依据是"本引擎的 store + parts 目录"，
+    /// 放在构造函数里会让任何构造了引擎的代码（尤其是测试）去清真实用户的目录——
+    /// 这个错误真的发生过一次：单元测试构造引擎时未指定 partsDir，回落到 %APPDATA%，
+    /// 把三个遗留断点当成孤儿删了。
+    /// 默认只清 24 小时以前的：万一元数据因为崩溃没写下去，当天的断点还能留给用户续传。
+    /// </summary>
+    public int SweepOrphanParts(TimeSpan? minAge = null)
+        => _idm.SweepOrphanParts(_store.All(), minAge);
+
+    public async Task<int> ClearAllAsync(CancellationToken ct = default)
+    {
+        List<DownloadTaskInfo> tasks;
+        try
+        {
+            tasks = await GetAllTasksAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            // 引擎掉线也要能把本地这些行清掉：用户要的结果是"列表空了"
+            _log($"清空任务列表时读取列表失败（改为只清本地记录）: {ex.Message}");
+            tasks = new List<DownloadTaskInfo>();
+        }
+
+        // 列表可能漏掉一些只剩本地记录的残留，一并收进来
+        var gids = new HashSet<string>(tasks.Select(t => t.Gid));
+        var metas = _store.All();
+        foreach (var m in metas) gids.Add(m.Gid);
+        foreach (var h in _history.Keys) gids.Add(h);
+        if (gids.Count == 0) return 0;
+
+        // 墓碑：aria2 会话文件每 10 秒落盘，异常退出后会把已清掉的任务复活
+        try
+        {
+            foreach (var t in tasks)
+                if (t.Urls.Count > 0)
+                    _tombstones.Mark(t.Urls.Where(u => !string.IsNullOrWhiteSpace(u)), t.Dir ?? _defaultDir);
+            foreach (var m in metas)
+                if (m.Urls.Count > 0)
+                    _tombstones.Mark(m.Urls.Where(u => !string.IsNullOrWhiteSpace(u)), m.Dir ?? _defaultDir);
+        }
+        catch (Exception ex) { _log($"清空任务列表时登记墓碑失败: {ex.Message}"); }
+
+        foreach (var gid in gids) SuppressHistory(gid);
+
+        // IDM：直接从内存池摘掉（在跑的会被取消）
+        foreach (var gid in gids.Where(IdmTaskManager.IsIdmGid).ToList())
+            _idm.Remove(gid, deleteFile: false);
+
+        var ariaGids = gids.Where(g => !IdmTaskManager.IsIdmGid(g)).ToList();
+        if (ariaGids.Count > 0)
+        {
+            foreach (var gid in ariaGids)
+            {
+                try { await _client.RemoveAsync(gid, ct).ConfigureAwait(false); }
+                catch { /* 已经是 stopped 结果：交给下面的 purge */ }
+            }
+            try
+            {
+                await WithEngineGuardAsync("清空任务列表", c => _client.PurgeDownloadResultAsync(c), ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) { _log($"清空任务列表时引擎未成功执行（继续本地清理）: {ex.Message}"); }
+        }
+
+        _store.RemoveMany(gids);
+        foreach (var gid in gids)
+        {
+            _history.TryRemove(gid, out _);
+            _lastStates.TryRemove(gid, out _);
+        }
+        InvalidateSnapshot();
+        _log($"[engine] 已清除任务列表：{gids.Count} 条（未删除文件）");
+        return gids.Count;
     }
 
     /// <summary>重新下载：用原任务的 URL 与参数新建任务。
