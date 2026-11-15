@@ -85,17 +85,19 @@ public sealed class IdmTaskManager : IAsyncDisposable
 
     private void ApplyFairShare()
     {
-        var active = _tasks.Values.Where(t => t.State == IdmTaskState.Active).ToList();
-        long global = Interlocked.Read(ref _globalLimit);
-        long share = global > 0 && active.Count > 0 ? global / active.Count : 0;
+        foreach (var e in _tasks.Values.Where(t => t.State == IdmTaskState.Active).ToList())
+            e.Downloader?.UpdateLimit(EffectiveLimitFor(e));
+    }
 
-        foreach (var e in active)
-        {
-            long effective = e.TaskLimit > 0
-                ? (share > 0 ? Math.Min(e.TaskLimit, share) : e.TaskLimit)
-                : share;
-            e.Downloader?.UpdateLimit(effective);
-        }
+    /// <summary>某个任务当前应生效的速率：全局额度按活动任务平分，再与单任务限速取小。</summary>
+    private long EffectiveLimitFor(Entry e)
+    {
+        long global = Interlocked.Read(ref _globalLimit);
+        int active = Math.Max(1, _tasks.Values.Count(t => t.State == IdmTaskState.Active));
+        long share = global > 0 ? global / active : 0;
+        return e.TaskLimit > 0
+            ? (share > 0 ? Math.Min(e.TaskLimit, share) : e.TaskLimit)
+            : share;
     }
 
     public static bool Handles(string url) =>
@@ -154,7 +156,10 @@ public sealed class IdmTaskManager : IAsyncDisposable
 
         // 每次运行一个新 downloader：文件句柄随 runner 结束而释放，暂停→继续才不会互相踩
         var downloader = new IdmHttpDownloader(_log);
-        downloader.UpdateLimit(entry.TaskLimit);
+        // 新任务启动时也要吃到全局额度：原先只下发 entry.TaskLimit（通常是 0 = 不限），
+        // 而 ApplyFairShare 只在"限速变更"和"任务结束"时调用——于是"先设限速、再开始下载"
+        // 这个最常见的顺序下，全局限速对 IDM 任务完全不生效（实测 6 MB/s 跑出 25 MB/s）。
+        downloader.UpdateLimit(EffectiveLimitFor(entry));
         entry.Downloader = downloader;
 
         var opts = new IdmDownloadOptions
@@ -165,7 +170,7 @@ public sealed class IdmTaskManager : IAsyncDisposable
             FileName = req.FileName,
             MaxConnections = req.Connections > 0 ? req.Connections : _defaultConnections,
             Referer = req.Referer,
-            SpeedLimit = req.SpeedLimit,
+            SpeedLimit = EffectiveLimitFor(entry),
             PartsDirectory = _partsDir,
             PartKey = entry.Gid,   // 按 gid 命名断点：同名不同 URL 的两个任务不会互相踩
             OverwriteTarget = req.AllowOverwriteExisting,   // 与 aria2 的 allow-overwrite 同语义，默认 false
@@ -177,6 +182,8 @@ public sealed class IdmTaskManager : IAsyncDisposable
 
         entry.State = IdmTaskState.Active;
         entry.Info.State = TaskState.Active;
+        // 活动数变了：重新平分全局额度（3 个任务先后启动时，第一个不能一直占着整份）
+        ApplyFairShare();
 
         entry.Runner = Task.Run(async () =>
         {
