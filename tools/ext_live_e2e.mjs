@@ -45,10 +45,27 @@ const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://127.0.0.1');
   hits.push(u.pathname + u.search);
   if (u.pathname === '/f.bin') {
+    // 必须真的支持 Range：扩展会先探测（Range 请求要回 206），
+    // 不支持分段的链接现在**故意放给浏览器**（两周前新增的行为）。
+    // 这个服务原先只会回 200，导致脚本一直报"扩展没接管"，其实是产品在按预期工作。
+    const m = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || '');
+    if (m) {
+      const start = Number(m[1]);
+      const end = m[2] ? Math.min(Number(m[2]), payload.length - 1) : payload.length - 1;
+      res.writeHead(206, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${FILE_NAME}"`,
+        'Content-Length': String(end - start + 1),
+        'Content-Range': `bytes ${start}-${end}/${payload.length}`,
+        'Accept-Ranges': 'bytes',
+      });
+      return res.end(payload.subarray(start, end + 1));
+    }
     res.writeHead(200, {
       'Content-Type': 'application/octet-stream',
       'Content-Disposition': `attachment; filename="${FILE_NAME}"`,
       'Content-Length': String(payload.length),
+      'Accept-Ranges': 'bytes',
     });
     return res.end(payload);
   }
@@ -133,8 +150,11 @@ try {
 
   // 找 Service Worker 目标，从 URL 里取扩展 id
   const targets = await cdpList();
-  const sw = targets.find((t) => t.type === 'service_worker' && t.url.startsWith('chrome-extension://'));
-  if (!sw) throw new Error('没找到扩展 Service Worker，扩展可能没加载：' + JSON.stringify(targets.map((t) => t.type)));
+  // MV3 的后台在"还没被事件唤醒"时，Edge 会把它报成 background_page 而不是 service_worker；
+  // 两种都要认，否则脚本会误判成"扩展没加载"（实测 Edge 136 上就是这种表现）。
+  const sw = targets.find((t) => (t.type === 'service_worker' || t.type === 'background_page')
+    && (t.url || '').startsWith('chrome-extension://'));
+  if (!sw) throw new Error('没找到扩展后台目标，扩展可能没加载：' + JSON.stringify(targets.map((t) => [t.type, t.url])));
   const extId = new URL(sw.url).host;
   console.log('[live] 扩展 id:', extId);
 
@@ -155,6 +175,26 @@ try {
   const readBack = await browser.eval(
     `chrome.storage.local.get('settings').then(o => JSON.stringify(o.settings || null))`, true, sessionId);
   console.log('[live] 写入配置:', wrote, '回读:', readBack);
+
+  if (process.argv.includes('--diag')) {
+    // 诊断模式：查站点权限、ping、并直接 POST 一次 /api/download 验证扩展→客户端这条路。
+    // 注意 POST 会在客户端留下一条失败任务（diag.bin，连的是 127.0.0.1:1），看完记得清列表。
+    const perm = await browser.eval(
+      `chrome.permissions.contains({origins:['http://*/*']}).then(v => 'hostAccess=' + v)`, true, sessionId);
+    const ping = await browser.eval(
+      `fetch('http://127.0.0.1:${CLIENT_PORT}/api/ping')
+         .then(r => 'ping ' + r.status).catch(e => 'ping ERR ' + e.message)`, true, sessionId);
+    const post = await browser.eval(
+      `fetch('http://127.0.0.1:${CLIENT_PORT}/api/download', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json', 'X-Kokona-Secret': ${JSON.stringify(SECRET)} },
+         body: JSON.stringify({ urls: ['http://127.0.0.1:1/diag.bin'] })
+       }).then(r => 'post ' + r.status).catch(e => 'post ERR ' + e.message)`, true, sessionId);
+    console.log('[diag]', perm, '|', ping, '|', post);
+    browser.close();
+    process.exit(0);
+  }
+
   browser.close();
 
   // 打开测试页
@@ -170,17 +210,43 @@ try {
   // 轮询真客户端
   const task = await waitFor(async () => {
     try {
-      const r = await fetch(`http://127.0.0.1:${CLIENT_PORT}/api/stats`, {
+      // /api/stats 只返回统计（没有任务数组）：从那里找 task 永远找不到，
+      // 于是脚本不管扩展有没有接管都会报"没收到任务"。要查 /api/tasks。
+      const r = await fetch(`http://127.0.0.1:${CLIENT_PORT}/api/tasks`, {
         headers: { 'X-Kokona-Secret': SECRET },
       });
       if (!r.ok) return null;
-      const d = await r.json();
-      const list = d.tasks || d.Tasks || [];
-      return list.find((t) => (t.urls || []).some((u) => u.includes('/f.bin'))) || null;
+      const list = await r.json();
+      return (list || []).find((t) => (t.urls || []).some((u) => u.includes('/f.bin'))) || null;
     } catch { return null; }
   }, 30000);
 
   if (!task) {
+    // 失败时把扩展内部状态打出来：下载项是 complete/cancelled、以及 storage 里的转发记录，
+    // 能直接区分"没接管"与"接管了但请求没发出去"
+    try {
+      const ver2 = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).json();
+      const b2 = await new Cdp(ver2.webSocketDebuggerUrl).open();
+      const t2 = await cdpList();
+      const bg = t2.find((t) => (t.type === 'service_worker' || t.type === 'background_page')
+        && (t.url || '').startsWith('chrome-extension://'));
+      if (bg) {
+        const at2 = await b2.send('Target.attachToTarget', { targetId: bg.id, flatten: true });
+        const sid2 = at2.result && at2.result.sessionId;
+        const dl = await b2.eval(
+          `chrome.downloads.search({}).then(l => JSON.stringify(l.map(x => ({
+             id: x.id, state: x.state, err: x.error, url: (x.url || '').slice(0, 60),
+             byExt: x.byExtensionId || '' }))))`, true, sid2);
+        const st = await b2.eval(
+          `chrome.storage.local.get(null).then(o => JSON.stringify(o).slice(0, 400))`, true, sid2);
+        console.log('[diag] 下载项:', dl);
+        console.log('[diag] storage:', st);
+      } else {
+        console.log('[diag] 没有后台目标');
+      }
+      b2.close();
+    } catch (e) { console.log('[diag] 读取扩展状态失败:', e.message); }
+
     failures.push('客户端没有收到任务（扩展没接管，或密钥/端口不对）');
   } else {
     console.log('[live] 客户端已收到任务:', task.name, task.state);
