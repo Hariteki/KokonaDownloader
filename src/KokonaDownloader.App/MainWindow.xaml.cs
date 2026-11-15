@@ -283,15 +283,22 @@ public partial class MainWindow : Window, IDisposable
             if (!isNewTask) return;
             if (!_progressWindows.ContainsKey(t.Gid))
             {
-                if (!ShouldCreateProgressWindow(t.Gid)) return;
+                // 复用优先于新建：实测每"建窗→关窗"一轮就多约 35 句柄 / 1.4 MB（WinUI 建销泄漏）。
+                // 先找藏进池子的，配额满了才回收最旧的"已结束但仍可见"窗口。
+                var win = TryTakeReusableWindow();
+                bool reused = win is not null;
+                if (!reused && !ShouldCreateProgressWindow(t.Gid)) return;
                 try
                 {
-                    var win = new ProgressWindow(t.Gid, t.Name, t.IsBt);
+                    win ??= new ProgressWindow(t.Gid, t.Name, t.IsBt);
                     // 先分配槽位再登记：AssignWindowSlot 扫描存活窗口，若先登记会把新窗自身（默认 Slot=0）
                     // 误判为占用 0 号位，导致首个窗口错位、满员时回退到 5 号位造成重叠
                     win.Slot = AssignWindowSlot();
-                    win.Closed += (_, _) => _progressWindows.Remove(t.Gid);
+                    // 不能捕获建窗时的 t.Gid：窗口会被 Retarget 到别的任务，
+                    // 关窗时按旧 gid 删会漏掉新 key（字典越积越多）
+                    win.Closed += (_, _) => RemoveProgressWindow(win);
                     _progressWindows[t.Gid] = win;
+                    if (reused) win!.Retarget(t.Gid, t.Name, t.IsBt);
                     SizeAndPlaceProgressWindow(win);
                     // 激活与强制前台延迟到下一调度周期：把"建窗（XAML 加载 + 原生背景挂载）"与
                     // "窗口激活"拆到不同帧，避免高并发下同一帧内密集触发原生调用（实测会命中
@@ -306,7 +313,7 @@ public partial class MainWindow : Window, IDisposable
                         }
                         catch (Exception ex) { App.Log($"激活进度小窗失败: {ex.Message}"); }
                     });
-                    App.Log($"[ui] 进度小窗已创建 gid={t.Gid} title={t.Name} slot={win.Slot}");
+                    App.Log($"[ui] 进度小窗{(reused ? "复用" : "新建")} gid={t.Gid} title={t.Name} slot={win.Slot}");
                 }
                 catch (Exception ex) { App.Log($"打开进度小窗失败: {ex.Message}"); }
             }
@@ -315,8 +322,9 @@ public partial class MainWindow : Window, IDisposable
         {
             if (_progressWindows.TryGetValue(t.Gid, out var win))
             {
-                _progressWindows.Remove(t.Gid);
-                try { win.Close(); } catch { }
+                // 一律藏进池子，不销毁（也不看 IsFinished：下完立即被删时它还没置位）。
+                // 真正销毁只发生在用户点窗口的 ×（Closed 事件）或程序退出。
+                win.Park();
             }
         }
         // Completed/Failed：小窗自身轮询会停在完成态并显示"打开文件夹"，不自动关闭
@@ -329,6 +337,38 @@ public partial class MainWindow : Window, IDisposable
     ///  2. 存活窗口已达 <see cref="MaxLiveProgressWindows"/>：优先回收**最旧的已结束窗口**腾出位置；
     ///  3. 存活的全是进行中窗口：本次不新建（任务本身照常在主列表/托盘里可见）。
     /// </summary>
+    /// <summary>找一个可以复用的窗口；找到即从字典摘下（调用方再用新 gid 登记）。</summary>
+    private ProgressWindow? TryTakeReusableWindow()
+    {
+        // 藏进池子的优先（用户已经"关"过它了，复用无观感变化）
+        var parked = _progressWindows
+            .Where(kv => kv.Value.IsParked)
+            .OrderBy(kv => kv.Value.CreatedAt)
+            .FirstOrDefault();
+        if (parked.Key is not null)
+        {
+            _progressWindows.Remove(parked.Key);
+            return parked.Value;
+        }
+
+        // 没有藏起来的：只有配额满了才回收最旧的已结束窗口（保留"最多 6 个完成窗可见"）
+        if (_progressWindows.Count < MaxLiveProgressWindows) return null;
+        var oldest = _progressWindows
+            .Where(kv => kv.Value.IsFinished)
+            .OrderBy(kv => kv.Value.CreatedAt)
+            .FirstOrDefault();
+        if (oldest.Key is null) return null;
+        _progressWindows.Remove(oldest.Key);
+        return oldest.Value;
+    }
+
+    /// <summary>窗口被真正关闭时按"当前指向的任务"摘掉登记（窗口可能被复用过多次）。</summary>
+    private void RemoveProgressWindow(ProgressWindow win)
+    {
+        var key = _progressWindows.FirstOrDefault(kv => ReferenceEquals(kv.Value, win)).Key;
+        if (key is not null) _progressWindows.Remove(key);
+    }
+
     private bool ShouldCreateProgressWindow(string gid)
     {
         var now = DateTime.UtcNow;
@@ -350,23 +390,12 @@ public partial class MainWindow : Window, IDisposable
             return false;
         }
 
-        while (_progressWindows.Count >= MaxLiveProgressWindows)
+        // 到达上限且没有可复用窗口（TryTakeReusableWindow 已试过）→ 不新建。
+        // 注意这里不再主动 Close：关窗正是泄漏源（每轮约 35 句柄）
+        if (_progressWindows.Count >= MaxLiveProgressWindows)
         {
-            var staleGid = _progressWindows
-                .Where(kv => kv.Value.IsFinished)
-                .OrderBy(kv => kv.Value.CreatedAt)
-                .Select(kv => kv.Key)
-                .FirstOrDefault();
-            if (staleGid == null)
-            {
-                App.Log($"[ui] 进度小窗已达上限 {MaxLiveProgressWindows}，跳过 gid={gid}");
-                return false;
-            }
-            if (_progressWindows.Remove(staleGid, out var stale))
-            {
-                try { stale.Close(); } catch { }
-                App.Log($"[ui] 回收已结束的进度小窗 gid={staleGid} 以腾出配额");
-            }
+            App.Log($"[ui] 进度小窗已达上限 {MaxLiveProgressWindows}，跳过 gid={gid}");
+            return false;
         }
 
         _recentWindowCreations.Enqueue(now);

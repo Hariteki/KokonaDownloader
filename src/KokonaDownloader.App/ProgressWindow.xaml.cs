@@ -11,17 +11,17 @@ namespace KokonaDownloader.App;
 /// </summary>
 public partial class ProgressWindow : Window
 {
-    private readonly string _gid;
+    private string _gid;   // 复用时改写（Retarget），不再是 readonly
     private bool _closed;
     private bool _engineSubscribed;
     /// <summary>BT 任务小窗：以方块矩阵替代进度条，窗口更高。</summary>
-    public bool IsBt { get; }
+    public bool IsBt { get; private set; }
 
     /// <summary>任务是否已结束（结束的小窗可被主界面回收，用于限制同时存在的窗口数）。</summary>
     public bool IsFinished { get; private set; }
 
     /// <summary>创建时刻：回收时按"最旧的已结束窗口"优先。</summary>
-    public DateTime CreatedAt { get; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; private set; } = DateTime.UtcNow;
 
     /// <summary>级联槽位（由主界面分配）：决定小窗相对屏幕中心的错开位置，避免并发小窗完全堆叠。</summary>
     public int Slot { get; set; }
@@ -86,13 +86,15 @@ public partial class ProgressWindow : Window
                 var t = e.Tasks.FirstOrDefault(x => x.Gid == _gid);
                 if (t == null)
                 {
-                    DispatcherQueue.TryEnqueue(Close);
+                    // 任务不在快照里 → 藏进池子等复用（不再区分是否已结束：下完立即被删时，
+                    // IsFinished 可能还没被引擎事件置位，按状态分会漏掉复用，实测 15 轮又建了 14 个）
+                    DispatcherQueue.TryEnqueue(Park);
                     return;
                 }
                 DispatcherQueue.TryEnqueue(() => UpdateUi(t));
                 break;
             case "TaskRemoved" when e.Task?.Gid == _gid:
-                DispatcherQueue.TryEnqueue(Close);
+                DispatcherQueue.TryEnqueue(Park);
                 break;
         }
     }
@@ -109,8 +111,8 @@ public partial class ProgressWindow : Window
                     ?? await engine.GetTaskAsync(_gid);
             if (t == null)
             {
-                // 任务已被删除：关闭窗口
-                DispatcherQueue.TryEnqueue(Close);
+                // 任务已被删除：藏进池子等复用
+                DispatcherQueue.TryEnqueue(Park);
                 return;
             }
             DispatcherQueue.TryEnqueue(() => UpdateUi(t));
@@ -273,6 +275,57 @@ public partial class ProgressWindow : Window
     }
 
     private void OnCloseClick(object sender, RoutedEventArgs e) => Close();
+
+    /// <summary>窗口已隐藏进池（等待复用）。</summary>
+    public bool IsParked { get; private set; }
+
+    /// <summary>
+    /// 隐藏而不是销毁。
+    ///
+    /// 起因：实测（2026-11-16）每"建窗→关窗"一轮，进程就多约 35 个句柄、1.4 MB 内存，
+    /// 60 轮后句柄 3571 → 4094 且静置不回落；同负载下纯引擎路径句柄完全平稳（466 → 469）。
+    /// 所以改成"用完藏进池子"，让窗口对象活过任务生命周期。
+    /// </summary>
+    public void Park()
+    {
+        if (_closed) return;
+        IsParked = true;
+        try { AppWindow.Hide(); } catch { }
+    }
+
+    /// <summary>把窗口重新指向一个新任务并重置全部视觉状态（不销毁、不重建）。</summary>
+    public void Retarget(string gid, string taskName, bool isBt)
+    {
+        if (_closed) return;
+        _gid = gid;
+        IsBt = isBt;
+        IsParked = false;
+        IsFinished = false;
+        CreatedAt = DateTime.UtcNow;
+        _lastAppliedContentHeight = -1;
+
+        Title = taskName;
+        TitleText.Text = taskName;
+
+        // 在引擎下一拍刷新前，先把上一个任务的痕迹清干净，避免"新任务长得像上一个"
+        Bar.Value = 0;
+        PercentText.Text = "0%";
+        SpeedText.Text = "0 B/s";
+        SizeText.Text = "";
+        EtaText.Text = "";
+        StatusText.Text = "下载中";
+        SetPauseButton(pause: true);
+        BtnPause.Visibility = Visibility.Visible;
+        BtnOpenFolder.Visibility = Visibility.Collapsed;
+        PieceGrid.BitField = null;
+        PieceGrid.NumPieces = 0;
+        PieceGrid.IsActive = false;
+        PieceGrid.Visibility = isBt ? Visibility.Visible : Visibility.Collapsed;
+        Bar.Visibility = isBt ? Visibility.Collapsed : Visibility.Visible;
+
+        try { AppWindow.Show(); } catch { }
+        _ = RefreshOnceAsync();
+    }
 
     private static string FormatBytes(long bytes)
     {
