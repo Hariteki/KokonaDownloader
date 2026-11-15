@@ -19,7 +19,12 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const EXT_DIR = path.resolve(__dirname, '..', 'extension-v2');
+const argOf = (k, d) => {
+  const hit = process.argv.find((a) => a.startsWith(`--${k}=`));
+  return hit ? hit.slice(k.length + 3) : d;
+};
+// 允许指向扩展副本（例如加了打点的 artifacts/ext-debug），默认用仓库里的正式版
+const EXT_DIR = path.resolve(__dirname, '..', argOf('ext-dir', 'extension-v2'));
 
 const arg = (k, d) => {
   const hit = process.argv.find((a) => a.startsWith(`--${k}=`));
@@ -152,44 +157,71 @@ try {
   const targets = await cdpList();
   // MV3 的后台在"还没被事件唤醒"时，Edge 会把它报成 background_page 而不是 service_worker；
   // 两种都要认，否则脚本会误判成"扩展没加载"（实测 Edge 136 上就是这种表现）。
-  const sw = targets.find((t) => (t.type === 'service_worker' || t.type === 'background_page')
-    && (t.url || '').startsWith('chrome-extension://'));
-  if (!sw) throw new Error('没找到扩展后台目标，扩展可能没加载：' + JSON.stringify(targets.map((t) => [t.type, t.url])));
-  const extId = new URL(sw.url).host;
-  console.log('[live] 扩展 id:', extId);
+  // 我们的扩展是 MV3：目标 URL 一定是 chrome-extension://<id>/<manifest 里的 service_worker 路径>。
+  // Edge 自带的那几个是 MV2 的 _generated_background_page.html，按路径就能直接排掉。
+  const manifest = JSON.parse(fs.readFileSync(path.join(EXT_DIR, 'manifest.json'), 'utf8'));
+  const swPath = '/' + (manifest.background && manifest.background.service_worker || '').replace(/^\/+/, '');
 
-  // 通过浏览器级会话 attach 到扩展的 Service Worker 写配置
+  // SW 是懒启动的：刚拉起浏览器时它可能还没出现，等一会儿
+  let extTargets = [];
+  await waitFor(async () => {
+    const t = await cdpList();
+    extTargets = t.filter((x) => (x.url || '').includes('chrome-extension://') && (x.url || '').endsWith(swPath));
+    return extTargets.length > 0;
+  }, 20000);
+  if (extTargets.length === 0)
+    throw new Error(`等不到扩展的后台（期望路径 ${swPath}）：`
+      + JSON.stringify((await cdpList()).map((t) => [t.type, t.url])));
+
   const ver = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).json();
   const browser = await new Cdp(ver.webSocketDebuggerUrl).open();
-  const attached = await browser.send('Target.attachToTarget', { targetId: sw.id, flatten: true });
-  const sessionId = attached.result && attached.result.sessionId;
-  if (!sessionId) throw new Error('attach 到扩展 SW 失败: ' + JSON.stringify(attached));
+
+  // 不能取"第一个 chrome-extension:// 目标"：Edge 自带若干扩展（它们报 _generated_background_page.html），
+  // 真机实测正是这个坑——密钥被写进了 Edge 自带扩展的 storage，我们的扩展读到的 settings 是空的，
+  // 于是一路"接管正常、探测通过、最后 401 密钥缺失"，看起来像扩展根本不工作。
+  // 按 manifest 里的 service_worker 路径就能唯一认出自己的后台（上面 filter 已保证）。
+  const sw = extTargets[0];
+  const extId = new URL(sw.url).host;
+  console.log('[live] 扩展 id:', extId, '（按 service_worker 路径认领）');
+
+  // 写配置不在 SW 上下文里做：MV3 的 SW 目标上 Runtime.evaluate 拿不到 chrome 命名空间
+  // （实测 "chrome is not defined"）。打开扩展自己的选项页，页面上下文里 chrome API 是齐的。
+  const optPage = await (await fetch(
+    `http://127.0.0.1:${CDP_PORT}/json/new?chrome-extension://${extId}/ui/options.html`,
+    { method: 'PUT' })).json();
+  const optConn = await new Cdp(optPage.webSocketDebuggerUrl).open();
+  const inPage = (expr) => optConn.eval(expr, true);
+
+  // 页面刚建出来时脚本还没跑，chrome.storage 可能还没挂上——等它就绪再写
+  await waitFor(async () => {
+    try { return (await inPage('typeof chrome !== "undefined" && !!chrome.storage')) === true; }
+    catch { return false; }
+  }, 8000);
 
   const settings = {
     host: '127.0.0.1', port: CLIENT_PORT, secret: SECRET,
     autoCapture: true, forceAttachment: false,
   };
-  const wrote = await browser.eval(
-    `chrome.storage.local.set({settings:${JSON.stringify(settings)}}).then(() => 'ok').catch(e => 'ERR ' + e.message)`,
-    true, sessionId);
-  const readBack = await browser.eval(
-    `chrome.storage.local.get('settings').then(o => JSON.stringify(o.settings || null))`, true, sessionId);
+  const wrote = await inPage(
+    `chrome.storage.local.set({settings:${JSON.stringify(settings)}}).then(() => 'ok').catch(e => 'ERR ' + e.message)`);
+  const readBack = await inPage(
+    `chrome.storage.local.get('settings').then(o => JSON.stringify(o.settings || null))`);
   console.log('[live] 写入配置:', wrote, '回读:', readBack);
 
   if (process.argv.includes('--diag')) {
     // 诊断模式：查站点权限、ping、并直接 POST 一次 /api/download 验证扩展→客户端这条路。
     // 注意 POST 会在客户端留下一条失败任务（diag.bin，连的是 127.0.0.1:1），看完记得清列表。
-    const perm = await browser.eval(
-      `chrome.permissions.contains({origins:['http://*/*']}).then(v => 'hostAccess=' + v)`, true, sessionId);
-    const ping = await browser.eval(
+    const perm = await inPage(
+      `chrome.permissions.contains({origins:['http://*/*']}).then(v => 'hostAccess=' + v)`);
+    const ping = await inPage(
       `fetch('http://127.0.0.1:${CLIENT_PORT}/api/ping')
-         .then(r => 'ping ' + r.status).catch(e => 'ping ERR ' + e.message)`, true, sessionId);
-    const post = await browser.eval(
+         .then(r => 'ping ' + r.status).catch(e => 'ping ERR ' + e.message)`);
+    const post = await inPage(
       `fetch('http://127.0.0.1:${CLIENT_PORT}/api/download', {
          method: 'POST',
          headers: { 'Content-Type': 'application/json', 'X-Kokona-Secret': ${JSON.stringify(SECRET)} },
          body: JSON.stringify({ urls: ['http://127.0.0.1:1/diag.bin'] })
-       }).then(r => 'post ' + r.status).catch(e => 'post ERR ' + e.message)`, true, sessionId);
+       }).then(r => 'post ' + r.status).catch(e => 'post ERR ' + e.message)`);
     console.log('[diag]', perm, '|', ping, '|', post);
     browser.close();
     process.exit(0);
@@ -238,9 +270,13 @@ try {
              id: x.id, state: x.state, err: x.error, url: (x.url || '').slice(0, 60),
              byExt: x.byExtensionId || '' }))))`, true, sid2);
         const st = await b2.eval(
-          `chrome.storage.local.get(null).then(o => JSON.stringify(o).slice(0, 400))`, true, sid2);
+          `chrome.storage.local.get('dbgTrace').then(o => JSON.stringify(o.dbgTrace || []))`, true, sid2);
         console.log('[diag] 下载项:', dl);
-        console.log('[diag] storage:', st);
+        try {
+          for (const line of JSON.parse(JSON.parse(st))) console.log('  [ext] ' + line);
+        } catch {
+          console.log('[diag] dbgTrace:', st);
+        }
       } else {
         console.log('[diag] 没有后台目标');
       }
@@ -251,13 +287,15 @@ try {
   } else {
     console.log('[live] 客户端已收到任务:', task.name, task.state);
     const done = await waitFor(async () => {
-      const r = await fetch(`http://127.0.0.1:${CLIENT_PORT}/api/stats`, { headers: { 'X-Kokona-Secret': SECRET } });
-      const d = await r.json();
-      const t = (d.tasks || []).find((x) => x.gid === task.gid);
-      return t && (t.state === 'Completed' || t.state === 'Failed') ? t : null;
+      // 同样别查 /api/stats（只有计数、没有任务数组），要查 /api/tasks；
+      // 状态值是小写的 completed / failed
+      const r = await fetch(`http://127.0.0.1:${CLIENT_PORT}/api/tasks`, { headers: { 'X-Kokona-Secret': SECRET } });
+      const list = await r.json();
+      const t = (list || []).find((x) => x.gid === task.gid);
+      return t && (t.state === 'completed' || t.state === 'failed') ? t : null;
     }, 60000);
     if (!done) failures.push('任务一直没到终态');
-    else if (done.state !== 'Completed') failures.push('任务失败: ' + (done.errorMessage || done.state));
+    else if (done.state !== 'completed') failures.push('任务失败: ' + (done.errorMessage || done.state));
     else {
       const file = path.join(process.env.USERPROFILE || '', 'Downloads', done.name || '');
       const ok2 = fs.existsSync(file) && fs.statSync(file).size === FILE_SIZE;
