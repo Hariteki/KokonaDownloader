@@ -272,6 +272,30 @@ _log = log;
         }
 
         _handle = File.OpenHandle(part, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read);
+
+        // 下载期间每 2 秒把脏页刷一次，把写回成本摊到整个下载过程里。
+        //
+        // 起因（2026-11-16 实测）：512MB 的下载，数据收齐后还要等 6–14 秒才变"已完成"。
+        // 取证结论是写回，不是改名——收尾显式刷盘要 10.7 秒（这台机器 512MB 写回约 43MB/s），
+        // 刷完再改名只要 120ms；不刷的话这份成本会藏在 File.Move 里，表现成"进度 100% 却卡住"。
+        // 周期刷盘后：收尾刷盘 10.7s → 1.1s，整单 20.0s → 17.2s。
+        // 环境变量可调（0 = 关闭），方便在快盘上验证开销。
+        int flushEveryMs = int.TryParse(Environment.GetEnvironmentVariable("KOKONA_FLUSH_MS"), out var __fm) ? __fm : 2000;
+        if (flushEveryMs > 0)
+        {
+            _flushCts = new CancellationTokenSource();
+            _flushLoop = Task.Run(async () =>
+            {
+                while (!_flushCts.IsCancellationRequested)
+                {
+                    try { await Task.Delay(flushEveryMs, _flushCts.Token).ConfigureAwait(false); }
+                    catch { return; }
+                    var h = _handle;
+                    if (h is null || h.IsClosed || h.IsInvalid) return;
+                    try { FlushFileBuffers(h); } catch { return; }
+                }
+            });
+        }
         if (_chunks.TotalLength <= 0)
             RandomAccess.SetLength(_handle, 0);
 
@@ -362,7 +386,15 @@ _log = log;
                 // 按需增长模式（不支持稀疏时）文件长度靠最后一次写入撑到 total，这里统一收口，
                 // 避免尾段恰好被别处覆盖导致长度差几个字节。
                 // 未知长度不需要：顺序写到最后，长度本来就是对的。
+                // 先停掉周期刷盘，再做最后一次同步刷盘 + 改名：
+                // 数据落稳再改名，用户看到的"已完成"才真的可用。
+                await StopPeriodicFlushAsync().ConfigureAwait(false);
                 if (!_unknownLength && _handle is not null) RandomAccess.SetLength(_handle, _chunks.TotalLength);
+                long flushStartedAt = _life.ElapsedMilliseconds;
+                if (_handle is not null) { try { FlushFileBuffers(_handle); } catch { } }
+                long flushMs = _life.ElapsedMilliseconds - flushStartedAt;
+                if (flushMs > 1000)
+                    _log?.Invoke($"[idm] 收尾刷盘耗时 {flushMs}ms（还有 {flushMs * 40 / 1024} MB 左右没落盘）");
                 _handle?.Dispose();
                 _handle = null;
 
@@ -409,6 +441,7 @@ _log = log;
         }
         finally
         {
+            await StopPeriodicFlushAsync().ConfigureAwait(false);
             checkpointCts.Cancel();
             try { await checkpoint.ConfigureAwait(false); } catch { }
             _abortRun = null;
@@ -1428,6 +1461,28 @@ _log = log;
     /// <summary>跨卷时断点的落点：目标目录下的隐藏子目录。</summary>
     internal const string RelocatedPartsDirName = ".kokona-parts";
 
+    private CancellationTokenSource? _flushCts;
+    private Task? _flushLoop;
+
+    private async Task StopPeriodicFlushAsync()
+    {
+        var cts = _flushCts;
+        var loop = _flushLoop;
+        _flushCts = null;
+        _flushLoop = null;
+        if (cts is null) return;
+        try { cts.Cancel(); } catch { }
+        if (loop is not null) { try { await loop.ConfigureAwait(false); } catch { } }
+        cts.Dispose();
+    }
+
+    /// <summary>把文件脏页同步刷到磁盘（周期刷盘与收尾刷盘都用它）。</summary>
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(
+        System.Runtime.InteropServices.DllImportSearchPath.System32)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool FlushFileBuffers(Microsoft.Win32.SafeHandles.SafeFileHandle h);
+
 
     /// <summary>
     /// 决定这次下载的断点目录。
@@ -1553,6 +1608,9 @@ _log = log;
 
     public ValueTask DisposeAsync()
     {
+        try { _flushCts?.Cancel(); } catch { }
+        _flushCts?.Dispose();
+        _flushCts = null;
         _handle?.Dispose();
         _http.Dispose();
         return ValueTask.CompletedTask;
