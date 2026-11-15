@@ -520,7 +520,20 @@ _log = log;
                     await Task.Delay(wait, ct).ConfigureAwait(false);
                 }
 
-                resp!.EnsureSuccessStatusCode();
+                // 401/403 且请求里没有 Cookie：多半是"需要登录"的站点。
+                // 浏览器扩展只有在用户点了「授权访问网站」之后才会带 Cookie（可选权限），
+                // 没授权时它会静默降级为空——用户看到的只是一个干巴巴的 401，不知道该做什么。
+                if (!resp!.IsSuccessStatusCode)
+                {
+                    bool needsLogin = resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+                        && !HasCookieHeader(opts);
+                    string hint = needsLogin
+                        ? "（该站点可能需要登录。若这是浏览器扩展接管的下载：请点扩展图标 →「授权访问网站」，"
+                          + "否则转发时不会带上登录 Cookie）"
+                        : "";
+                    throw new HttpRequestException(
+                        $"HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}{hint}", null, resp.StatusCode);
+                }
                 break;
             }
             catch (OperationCanceledException) { throw; }
@@ -1457,6 +1470,9 @@ _log = log;
 
     private static bool HasUserAgentHeader(IdmDownloadOptions opts)
         => opts.Headers?.Any(h => h.TrimStart().StartsWith("User-Agent:", StringComparison.OrdinalIgnoreCase)) == true;
+
+    private static bool HasCookieHeader(IdmDownloadOptions opts)
+        => opts.Headers?.Any(h => h.TrimStart().StartsWith("Cookie:", StringComparison.OrdinalIgnoreCase)) == true;
 
     /// <summary>跨卷时断点的落点：目标目录下的隐藏子目录。</summary>
     internal const string RelocatedPartsDirName = ".kokona-parts";
