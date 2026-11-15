@@ -1173,12 +1173,13 @@ _log = log;
             // 同卷不可能有"必须搬家"的理由：只可能是瞬时占用（杀毒扫描刚写完的文件、
             // 搜索索引、缩略图预览），或改名时内核正在回刷脏页。
             //
-            // 退避策略：**先立刻重试一次**，再按 20/40/80/160/320/640 毫秒退避，
-            // 总预算约 1.9 秒。上一版是"先睡再试"，白等了 0.9 秒才发现占用还在。
-            int[] backoff = { 0, 20, 40, 80, 160, 320, 640, 640 };
-            foreach (int wait in backoff)
+            // 退避策略：**每 100ms 探一次，最多等 8 秒**。
+            // 早先用的是几何退避（0/20/40/…/640，累计约 1.9 秒），问题在于
+            // 占用一旦在两次探测之间释放，我们还要把手上的睡眠睡完——实测 512MB 文件
+            // 收尾改名 6.2 秒，其中约 1.9 秒纯粹是在睡。改成等间隔探测，释放后最迟 100ms 就能走。
+            long deadline = Environment.TickCount64 + 8000;
+            while (true)
             {
-                if (wait > 0) Thread.Sleep(wait);
                 try
                 {
                     File.Move(src, dst, overwrite);
@@ -1190,10 +1191,10 @@ _log = log;
                 }
                 catch (IOException)
                 {
-                    // 还被占着，继续等
+                    if (Environment.TickCount64 >= deadline) throw;   // 等不到就按原样报错，绝不静默复制
+                    Thread.Sleep(100);
                 }
             }
-            throw;   // 等不到就按原样报错，绝不静默复制（复制同样会被拒，反而多写一份）
         }
         catch (IOException)
         {
@@ -1426,6 +1427,7 @@ _log = log;
 
     /// <summary>跨卷时断点的落点：目标目录下的隐藏子目录。</summary>
     internal const string RelocatedPartsDirName = ".kokona-parts";
+
 
     /// <summary>
     /// 决定这次下载的断点目录。
