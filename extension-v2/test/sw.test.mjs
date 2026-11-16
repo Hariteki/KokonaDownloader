@@ -16,6 +16,8 @@ async function startStub(opts = {}) {
   const requests = [];
   let settingsCalls = 0;
   let mode = opts.mode || 'ok';
+  let intercept = opts.intercept !== false;   // 客户端侧的"是否接管"，可被 POST /api/settings 改写
+  let patchCalls = 0;
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => { body += c; });
@@ -48,8 +50,13 @@ async function startStub(opts = {}) {
         return send(role, role === 200 ? { ok: true } : { ok: false });
       }
       if (req.url === '/api/settings') {
+        if (req.method === 'POST') {
+          patchCalls += 1;
+          try { intercept = JSON.parse(body || '{}').interceptBrowserDownloads === true; } catch { }
+          return send(200, { ok: true });
+        }
         settingsCalls += 1;
-        return send(200, { interceptBrowserDownloads: opts.intercept !== false });
+        return send(200, { interceptBrowserDownloads: intercept });
       }
       if (req.url === '/api/download') {
         if (mode === 'unauthorized') return send(401, { ok: false });
@@ -69,6 +76,8 @@ async function startStub(opts = {}) {
     setMode: (m) => { mode = m; },
     downloads: () => requests.filter((r) => r.url === '/api/download'),
     settingsCalls: () => settingsCalls,
+    patchCalls: () => patchCalls,
+    currentIntercept: () => intercept,
     close: () => new Promise((r) => server.close(r)),
   };
 }
@@ -519,6 +528,89 @@ test('强制附件：关掉开关后清掉已下发的规则', async () => {
   } finally {
     await stub.close();
   }
+});
+
+/* ---------------- 一键开关接管（popup 的 toggle-intercept） ---------------- */
+
+/** 触发 popup 的 toggle-intercept 消息，返回响应。 */
+async function sendToggle(chrome, enabled) {
+  return new Promise((resolve) => {
+    chrome.runtime.onMessage.__fire({ type: 'toggle-intercept', enabled }, {}, resolve);
+  });
+}
+
+test('一键关闭接管（在线）：写客户端，之后下载不再被接管', async () => {
+  const stub = await startStub({ intercept: true });
+  const chrome = bootChrome(stub);
+  try {
+    await bootWorker(chrome);
+
+    const r = await sendToggle(chrome, false);
+    assert.equal(r.ok, true);
+    assert.equal(r.enabled, false);
+    assert.equal(r.source, 'client', '在线时应以客户端为准');
+    assert.equal(stub.patchCalls(), 1, '没有把开关写给客户端');
+    assert.equal(stub.currentIntercept(), false, '客户端的 interceptBrowserDownloads 没被改成 false');
+
+    // 关掉后新下载不该再被接管
+    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 91, url: fileUrl(stub, 'off.zip') }));
+    await wait(500);
+    assert.equal(stub.downloads().length, 0, '接管已关却仍被接管');
+    assert.equal(chrome.__callsOf('downloads.cancel').length, 0, '接管关时不该取消浏览器下载');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('一键开启接管（在线）：写客户端，之后下载被接管', async () => {
+  const stub = await startStub({ intercept: false });
+  const chrome = bootChrome(stub);
+  try {
+    await bootWorker(chrome);
+
+    const r = await sendToggle(chrome, true);
+    assert.equal(r.ok, true);
+    assert.equal(r.enabled, true);
+    assert.equal(r.source, 'client');
+    assert.equal(stub.currentIntercept(), true, '客户端的 interceptBrowserDownloads 没被改成 true');
+
+    chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 92, url: fileUrl(stub, 'on.zip') }));
+    assert.equal(await waitFor(() => stub.downloads().length === 1), true, '接管已开却没有接管');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('一键关闭接管（离线）：回退本地并记 pending，客户端上线后追平', async () => {
+  // 先离线：端口 1 几乎肯定没人监听
+  const chrome = bootChrome({ port: 1 }, {
+    local: { settings: { host: '127.0.0.1', port: 1, secret: 's3cret', autoCapture: true } },
+  });
+  await bootWorker(chrome);
+
+  const r = await sendToggle(chrome, false);
+  assert.equal(r.ok, true);
+  assert.equal(r.source, 'local', '离线时应回退本地设置');
+
+  // 本地 autoCapture 被改成 false，且记了 pending
+  const local = await chrome.storage.local.get('settings');
+  assert.equal(local.settings.autoCapture, false, '离线时本地 autoCapture 没被关掉');
+  assert.equal(chrome.storage.session.data['pendingIntercept'], false, '没有记 pending（上线后无法追平）');
+
+  // 上线：同一个 chrome（同一份 storage.session）让客户端可达，触发一次 get-status 即追平
+  const stub = await startStub({ intercept: true });
+  chrome.storage.local.data.settings.port = stub.port;
+  chrome.storage.local.data.settings.host = '127.0.0.1';
+  chrome.storage.local.data.settings.secret = 's3cret';
+
+  const status = await new Promise((resolve) => {
+    chrome.runtime.onMessage.__fire({ type: 'get-status' }, {}, resolve);
+  });
+  assert.equal(status.ok, true);
+  assert.equal(stub.currentIntercept(), false, '上线后 pending 没有追平到客户端');
+  assert.equal(chrome.storage.session.data['pendingIntercept'], undefined, '追平后 pending 应被清除');
+
+  await stub.close();
 });
 
 test('强制附件：用户授权站点后自动补下规则', async () => {

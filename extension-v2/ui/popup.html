@@ -11,8 +11,26 @@
     }
     h1 { margin: 0 0 10px; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: #8a8a8a; }
-    .dot.on { background: #4cc27a; } .dot.err { background: #e05a4f; }
+    .dot.on { background: #4cc27a; } .dot.err { background: #e05a4f; } .dot.paused { background: #c77b2a; }
     .row { margin: 10px 0; }
+    .toggle {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 12px 14px; margin: 4px 0 10px; border-radius: 10px; cursor: pointer; user-select: none;
+      background: #2b2b2b; border: 1px solid #3a3a3a;
+    }
+    .toggle.off { background: #262626; border-color: #3a3a3a; }
+    .toggle .label { font-size: 13px; font-weight: 600; }
+    .toggle .sub { font-size: 11px; color: #9a9a9a; margin-top: 2px; }
+    .toggle .track {
+      flex: 0 0 auto; width: 40px; height: 22px; border-radius: 11px; background: #4cc27a; position: relative; transition: background .15s;
+    }
+    .toggle.off .track { background: #4a4a4a; }
+    .toggle .knob {
+      position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff;
+      transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.4);
+    }
+    .toggle.off .knob { transform: translateX(18px); }
+    .toggle .state { font-size: 11px; color: #8f8f8f; margin-top: 8px; }
     label { display: block; font-size: 12px; color: #a8a8a8; margin-bottom: 4px; }
     input {
       width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 6px;
@@ -33,12 +51,19 @@
   <h1><span id="dot" class="dot"></span>海兔下载器</h1>
   <div class="status" id="status">正在检测…</div>
 
+  <div class="toggle" id="captureToggle" role="switch" aria-checked="true" tabindex="0">
+    <div>
+      <div class="label">自动接管浏览器下载</div>
+      <div class="sub">关掉后浏览器下载不再交给海兔</div>
+    </div>
+    <div class="track"><div class="knob"></div></div>
+  </div>
+  <div class="state" id="captureState">检测中…</div>
+
   <div class="row">
     <button id="paste" class="primary">粘贴密钥并连接</button>
     <div class="hint" id="pairHint">先在客户端「设置 → 浏览器扩展连接」复制密钥，再点这个按钮</div>
   </div>
-
-  <div class="status" id="intercept" style="margin-top:6px"></div>
 
   <div class="row">
     <button id="grant">授权访问网站（用于带上登录 Cookie）</button>

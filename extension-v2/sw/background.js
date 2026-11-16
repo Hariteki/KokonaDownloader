@@ -13,7 +13,7 @@ import {
   addBypass, consumeBypass,
 } from '../lib/settings.js';
 import { collectSession, hasHostAccess, requestHostAccess } from '../lib/cookies.js';
-import { resolveAutoCapture, invalidateInterceptCache } from '../lib/intercept.js';
+import { resolveAutoCapture, invalidateInterceptCache, writeIntercept, reconcileIntercept } from '../lib/intercept.js';
 import { syncForceAttachment } from '../lib/dnr.js';
 import { probeRangeSupport } from '../lib/probe.js';
 
@@ -236,7 +236,10 @@ async function refreshBadge() {
   }
   try {
     await verifyKey(baseUrl(settings), settings.secret);
-    await setBadge('on');
+    // 上线了：把离线时点过的接管开关追平到客户端，再据此点亮徽章
+    await reconcileIntercept(settings);
+    const it = await resolveAutoCapture(settings);
+    await setBadge(it.enabled ? 'on' : 'paused', it.enabled ? undefined : '已接管关闭中（点扩展图标一键开启）');
     return { online: true, keyValid: true };
   } catch (e) {
     await setBadge('err', e && e.code === 'unauthorized' ? '密钥错误' : '连接异常');
@@ -244,11 +247,19 @@ async function refreshBadge() {
   }
 }
 
+/**
+ * 徽章把"接管是否开着"也表达出来：
+ *  - on     绿点空文：已连接、接管开（正常工作态）
+ *  - paused 琥珀 "II"：已连接但接管关 —— 一眼能看出"现在不会自动接"
+ *  - off    灰 "OFF"：客户端未运行
+ *  - err    红 "!"：密钥错 / 连接异常
+ */
 async function setBadge(state, title) {
-  const map = { on: '', off: 'OFF', err: '!' };
+  const text = { on: '', paused: 'II', off: 'OFF', err: '!' }[state] || '';
+  const color = state === 'err' ? '#C42B1C' : state === 'paused' ? '#C77B2A' : state === 'on' ? '#4CC27A' : '#8A8A8A';
   try {
-    await chrome.action.setBadgeText({ text: map[state] || '' });
-    await chrome.action.setBadgeBackgroundColor({ color: state === 'err' ? '#C42B1C' : '#8A8A8A' });
+    await chrome.action.setBadgeText({ text });
+    await chrome.action.setBadgeBackgroundColor({ color });
     await chrome.action.setTitle({ title: title ? `海兔下载器 · ${title}` : '海兔下载器' });
   } catch { /* 忽略 */ }
 }
@@ -302,6 +313,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         case 'request-host-access': {
           sendResponse({ ok: await requestHostAccess() });
+          break;
+        }
+        case 'toggle-intercept': {
+          const settings = await loadSettings();
+          const enabled = msg.enabled === true;
+          const r = await writeIntercept(settings, enabled);
+          const status = await refreshBadge();
+          sendResponse({ ok: true, enabled: r.enabled, source: r.source, status });
           break;
         }
         case 'manual-download': {

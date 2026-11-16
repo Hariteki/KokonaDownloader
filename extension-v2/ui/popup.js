@@ -18,17 +18,51 @@ function describe(status) {
   return ['on', '已连接'];
 }
 
+const captureToggle = document.getElementById('captureToggle');
+const captureState = document.getElementById('captureState');
+
+function setCaptureUI(enabled, source) {
+  captureToggle.classList.toggle('off', !enabled);
+  captureToggle.setAttribute('aria-checked', String(!!enabled));
+  const sub = captureToggle.querySelector('.sub');
+  sub.textContent = enabled ? '关掉后浏览器下载不再交给海兔' : '当前已暂停：浏览器下载不再交给海兔';
+  let text;
+  if (source === 'client') text = enabled ? '接管中（以客户端为准）' : '已关闭（以客户端为准）';
+  else if (source === 'offline') text = enabled ? '按本地设置（客户端未连接）' : '已关闭（客户端未连接，上线后自动同步）';
+  else if (source === 'pending') text = enabled ? '已开启，等客户端上线后同步' : '已关闭，等客户端上线后同步';
+  else text = enabled ? '接管中' : '已关闭';
+  captureState.textContent = text;
+}
+
+let toggling = false;
+
+async function doToggle() {
+  if (toggling) return;
+  toggling = true;
+  // 目标状态 = 当前是否处于"关"：开着点一下→关(false)，关着点一下→开(true)
+  const next = captureToggle.classList.contains('off');
+  captureToggle.style.opacity = '0.6';
+  const r = await chrome.runtime.sendMessage({ type: 'toggle-intercept', enabled: next });
+  captureToggle.style.opacity = '';
+  if (r && r.ok) {
+    setCaptureUI(r.enabled, r.source);
+    const [state, text] = describe(r.status);
+    setStatus(state, text);
+  }
+  toggling = false;
+}
+
+captureToggle.addEventListener('click', doToggle);
+captureToggle.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); doToggle(); }
+});
+
 async function refresh() {
   const resp = await chrome.runtime.sendMessage({ type: 'get-status' });
   const [state, text] = describe(resp && resp.status);
   setStatus(state, text);
-  const iLine = document.getElementById('intercept');
   const it = resp && resp.intercept;
-  if (iLine && it) {
-    iLine.textContent = it.source === 'client'
-      ? (it.enabled ? '自动接管：开启（客户端控制）' : '自动接管：已在客户端关闭')
-      : (it.source === 'offline' ? '自动接管：按本地设置（客户端未连接）' : '自动接管：按本地设置');
-  }
+  setCaptureUI(!!(it && it.enabled), it && it.source);
 
   grantHint.textContent = resp && resp.hostAccess
     ? '已授权：下载会带上登录 Cookie'

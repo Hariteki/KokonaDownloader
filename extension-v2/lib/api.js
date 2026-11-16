@@ -72,6 +72,27 @@ export async function getSettings(base, secret) {
   try { return await resp.json(); } catch { return null; }
 }
 
+/** 写客户端设置（PATCH 子集）。扩展里「一键开关接管」用它把 interceptBrowserDownloads 落回客户端。 */
+export async function patchSettings(base, secret, patch) {
+  let resp;
+  try {
+    resp = await withTimeout(base + '/api/settings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Kokona-Secret': secret || '',
+      },
+      body: JSON.stringify(patch || {}),
+    }, TIMEOUT_KEY);
+  } catch {
+    throw offline();
+  }
+  if (!resp.ok) throw new ApiError('http', 'HTTP ' + resp.status, resp.status);
+  let body = null;
+  try { body = await resp.json(); } catch { /* 允许空响应体 */ }
+  return body;
+}
+
 /** 提交下载。返回 { status, body }，由 logic.mapDownloadResponse 统一判定。 */
 export async function postDownload(base, secret, payload) {
   let resp;
