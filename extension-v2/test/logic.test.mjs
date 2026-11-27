@@ -5,6 +5,7 @@ import {
   isSupportedUrl, urlKey, baseName, normalizeSettings, baseUrl, isOwnApiUrl,
   buildHeaders, buildPayload, mapDownloadResponse, isFreshDownload, shouldCapture,
   classifyRangeProbe, probeNotice,
+  siteKeyOf, hostBelongsToSite, isSiteKeyBypassed, isDownloadSiteBypassed,
 } from '../lib/logic.js';
 
 test('isSupportedUrl 只接受 http/https/ftp', () => {
@@ -121,4 +122,41 @@ test('probeNotice 只对明确不支持给出提示', () => {
   assert.match(probeNotice('no'), /不支持多线程/);
   assert.equal(probeNotice('yes'), '');
   assert.equal(probeNotice('unknown'), '');
+});
+
+test('siteKeyOf 归一化站点键：小写、去 www.、忽略端口与路径', () => {
+  assert.equal(siteKeyOf('https://www.Apple.com/store?x=1'), 'apple.com');
+  assert.equal(siteKeyOf('https://apple.com/'), 'apple.com');
+  assert.equal(siteKeyOf('http://127.0.0.1:16830/page'), '127.0.0.1');
+  assert.equal(siteKeyOf('ftp://files.example.com/a.bin'), 'files.example.com');
+  assert.equal(siteKeyOf(''), '');
+  assert.equal(siteKeyOf('not a url'), '');
+  assert.equal(siteKeyOf('blob:https://a/uuid'), '');
+});
+
+test('hostBelongsToSite：子域算同一站，相似后缀不算', () => {
+  assert.equal(hostBelongsToSite('apple.com', 'apple.com'), true);
+  assert.equal(hostBelongsToSite('support.apple.com', 'apple.com'), true);
+  assert.equal(hostBelongsToSite('notapple.com', 'apple.com'), false);
+  assert.equal(hostBelongsToSite('apple.com.evil.com', 'apple.com'), false);
+  assert.equal(hostBelongsToSite('', 'apple.com'), false);
+});
+
+test('站点放行名单命中：referrer 或文件地址任一命中', () => {
+  const sites = { 'apple.com': Date.now() };
+  assert.equal(isSiteKeyBypassed('apple.com', sites), true);
+  assert.equal(isSiteKeyBypassed('support.apple.com', sites), true);
+  assert.equal(isSiteKeyBypassed('microsoft.com', sites), false);
+  assert.equal(isSiteKeyBypassed('', sites), false);
+
+  // 页面在 apple.com，文件在 CDN：按 referrer 命中
+  assert.equal(isDownloadSiteBypassed(
+    { referrer: 'https://www.apple.com/downloads/', url: 'https://cdn.other.com/x.dmg' }, sites), true);
+  // 用户直接打开直链：按文件地址命中
+  assert.equal(isDownloadSiteBypassed(
+    { referrer: '', url: 'https://download.apple.com/x.dmg' }, sites), true);
+  assert.equal(isDownloadSiteBypassed(
+    { referrer: 'https://microsoft.com/', url: 'https://cdn.other.com/x.dmg' }, sites), false);
+  assert.equal(isDownloadSiteBypassed({ referrer: '', url: '' }, sites), false);
+  assert.equal(isDownloadSiteBypassed({ referrer: 'https://apple.com/', url: '' }, {}), false);
 });

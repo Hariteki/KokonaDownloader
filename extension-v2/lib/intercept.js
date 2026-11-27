@@ -41,6 +41,14 @@ export async function invalidateInterceptCache() {
   try { await chrome.storage.session.remove(CACHE_KEY); } catch { /* 忽略 */ }
 }
 
+/**
+ * 只看缓存，不发网络请求：用于在"暂停浏览器下载"之前快速判断——
+ * 明确关着就根本不碰下载；缓存为空（首次/过期）时按"可能要接管"处理。
+ */
+export async function peekInterceptCache() {
+  return readCache();
+}
+
 /* ---------------- pending：离线时点的开关，等客户端上线后追平 ---------------- */
 
 export async function getPendingIntercept() {

@@ -5,15 +5,15 @@
 
 import {
   buildPayload, mapDownloadResponse, shouldCapture, normalizeSettings, urlKey, baseUrl,
-  probeNotice,
+  probeNotice, siteKeyOf, isDownloadSiteBypassed, isSiteKeyBypassed,
 } from '../lib/logic.js';
 import { ping, verifyKey, postDownload } from '../lib/api.js';
 import {
   loadSettings, saveSettings, getSessionStart, recentForwards, markForwarded,
-  addBypass, consumeBypass,
+  addBypass, consumeBypass, siteBypassList, setSiteBypass,
 } from '../lib/settings.js';
 import { collectSession, hasHostAccess, requestHostAccess } from '../lib/cookies.js';
-import { resolveAutoCapture, invalidateInterceptCache, writeIntercept, reconcileIntercept } from '../lib/intercept.js';
+import { resolveAutoCapture, invalidateInterceptCache, writeIntercept, reconcileIntercept, peekInterceptCache } from '../lib/intercept.js';
 import { syncForceAttachment } from '../lib/dnr.js';
 import { probeRangeSupport } from '../lib/probe.js';
 
@@ -165,18 +165,21 @@ async function handleCreated(item) {
   const settings = await loadSettings();
   const sessionStart = await getSessionStart();
 
-  // 开关以客户端为准（客户端不可达时退回本地设置）
-  const intercept = await resolveAutoCapture(settings);
-  if (!shouldCapture(item, { ...settings, autoCapture: intercept.enabled }, sessionStart)) return;
+  // 用户把当前网站列入了「本网站不接管」：整站放行（含子域），不探测也不转发
+  if (isDownloadSiteBypassed(item, await siteBypassList())) return;
+
+  // 先做纯本地判定（不查客户端）：URL 能不能接、是不是历史回放
+  if (!shouldCapture(item, { ...settings, autoCapture: true }, sessionStart)) return;
 
   const key = urlKey(item.url);
   // 用户右键选了「用浏览器下载（不接管）」：一次性放行，既不转发也不取消
   if (await consumeBypass(key)) return;
 
-  // has 与 add 必须在同一个微任务里（中间不能有 await），否则两个并发项会同时通过检查
-  if (inFlight.has(key)) { await cancelAndErase(item.id); return; }
-  inFlight.add(key);
+  // 客户端明确关着拦截：根本不碰浏览器下载（缓存为空时才需要后面再问）
+  const cachedIntercept = await peekInterceptCache();
+  if (cachedIntercept && cachedIntercept.enabled === false) return;
 
+  let ownsLock = false;
   try {
     const recent = await recentForwards();
     if (recent[key] && Date.now() - recent[key] < RECENT_WINDOW_MS) {
@@ -184,12 +187,30 @@ async function handleCreated(item) {
       return;
     }
 
+    // 立刻暂停浏览器下载：从 onCreated 到转发完成之间，浏览器可能已经下了几十 MB，
+    // 大文件甚至会直接下完（Edge 对 exe 还会弹自己的安全提示）。暂停只停传输，
+    // 失败时 resume 即可原样续上（保留 referrer / Cookie，不需要重新发起下载）。
+    await pauseDownload(item.id);
+
+    // 开关以客户端为准（客户端不可达时退回本地设置）
+    const intercept = await resolveAutoCapture(settings);
+    if (!intercept.enabled) {
+      await resumeDownload(item.id);
+      return;
+    }
+
+    // has 与 add 必须在同一个微任务里（中间不能有 await），否则两个并发项会同时通过检查
+    if (inFlight.has(key)) { await cancelAndErase(item.id); return; }
+    inFlight.add(key);
+    ownsLock = true;
+
     const session = await collectSession(item.url);
 
     // 明确不支持分段（忽略 Range / 416）就留给浏览器：客户端拿过去也只能单连接跑，
     // 反而丢掉浏览器的续传与断点提示。探测失败（'unknown'）时维持原有接管行为。
     const verdict = await probeRangeSupport(item.url);
     if (verdict === 'no') {
+      await resumeDownload(item.id);
       notify('海兔下载器', probeNotice(verdict));
       return;
     }
@@ -199,7 +220,8 @@ async function handleCreated(item) {
     const mapped = mapDownloadResponse(status, body);
 
     if (!mapped.ok) {
-      // 失败绝不动浏览器下载：宁可让浏览器下，也不能让用户两头落空
+      // 失败绝不动浏览器下载：恢复暂停，宁可让浏览器下，也不能让用户两头落空
+      await resumeDownload(item.id);
       notify('海兔下载器', mapped.message);
       await refreshBadge();
       return;
@@ -207,10 +229,23 @@ async function handleCreated(item) {
     await markForwarded(key);
     await cancelAndErase(item.id);
   } catch (e) {
+    await resumeDownload(item.id);
     await handleOffline(e);
   } finally {
-    inFlight.delete(key);
+    if (ownsLock) inFlight.delete(key);
   }
+}
+
+/** 暂停浏览器下载（只停传输，条目还在）；失败时静默返回 false。 */
+async function pauseDownload(id) {
+  if (typeof id !== 'number') return false;
+  try { await chrome.downloads.pause(id); return true; } catch { return false; }
+}
+
+/** 恢复被我们暂停的下载。客户端不可用 / 不支持分段时走这里，保证浏览器照常下载。 */
+async function resumeDownload(id) {
+  if (typeof id !== 'number') return false;
+  try { await chrome.downloads.resume(id); return true; } catch { return false; }
 }
 
 async function cancelAndErase(id) {
@@ -313,6 +348,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         case 'request-host-access': {
           sendResponse({ ok: await requestHostAccess() });
+          break;
+        }
+        case 'get-site-state': {
+          const site = siteKeyOf(msg.url || '');
+          const sites = await siteBypassList();
+          sendResponse({ ok: true, site, bypassed: isSiteKeyBypassed(site, sites) });
+          break;
+        }
+        case 'set-site-bypass': {
+          const site = siteKeyOf(msg.url || '');
+          if (!site) { sendResponse({ ok: false, code: 'no-site' }); break; }
+          const map = await setSiteBypass(site, msg.bypassed === true);
+          sendResponse({ ok: true, site, bypassed: isSiteKeyBypassed(site, map) });
           break;
         }
         case 'toggle-intercept': {

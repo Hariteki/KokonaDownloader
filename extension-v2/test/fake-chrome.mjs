@@ -61,6 +61,8 @@ export function makeChrome(options = {}) {
     downloads: {
       onCreated: makeEvent(),
       download: async (opts) => { record('downloads.download', [opts]); return ++downloadSeq; },
+      pause: async (id) => record('downloads.pause', [id]),
+      resume: async (id) => record('downloads.resume', [id]),
       cancel: async (id) => record('downloads.cancel', [id]),
       erase: async (q) => record('downloads.erase', [q]),
     },

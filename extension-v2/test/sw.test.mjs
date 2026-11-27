@@ -147,6 +147,7 @@ test('自动接管：带上 Cookie/UA 转发，并取消浏览器下载', async 
 
     assert.equal(await waitFor(() => chrome.__callsOf('downloads.cancel').length === 1), true, '没有取消浏览器下载');
     assert.equal(chrome.__callsOf('downloads.erase').length, 1);
+    assert.equal(chrome.__callsOf('downloads.pause').length, 1, '接管前应先暂停浏览器下载');
   } finally {
     await stub.close();
   }
@@ -161,6 +162,8 @@ test('失败不取消浏览器下载：401 与离线都要保留原生下载', a
     assert.equal(await waitFor(() => stub.downloads().length === 1), true);
     await wait(100);
     assert.equal(chrome.__callsOf('downloads.cancel').length, 0, '失败时绝不能取消浏览器下载');
+    assert.equal(chrome.__callsOf('downloads.pause').length, 1);
+    assert.equal(chrome.__callsOf('downloads.resume').length, 1, '失败时应恢复暂停的下载');
     assert.equal(chrome.__callsOf('notifications.create').length >= 1, true);
   } finally {
     await stub.close();
@@ -377,6 +380,7 @@ test('服务器忽略 Range（200）时不接管，保留浏览器下载并提�
     await wait(500);
     assert.equal(stub.downloads().length, 0, '不支持分段的链接不该转发给客户端');
     assert.equal(chrome.__callsOf('downloads.cancel').length, 0, '必须保留浏览器自己的下载');
+    assert.equal(chrome.__callsOf('downloads.resume').length, 1, '不支持分段时应恢复浏览器下载');
     const notes = chrome.__callsOf('notifications.create');
     assert.equal(notes.length >= 1, true);
     assert.match(notes[0].args[0].message, /不支持多线程/);
@@ -437,6 +441,90 @@ test('「不接管」只放行一次：同链接的新下载仍会被接管', as
     chrome.downloads.onCreated.__fire(makeDownloadItem({ id: 83, url }));
     assert.equal(await waitFor(() => stub.downloads().length === 1), true, '放行名单没有被消费掉');
     assert.equal(await waitFor(() => chrome.__callsOf('downloads.cancel').length === 1), true);
+  } finally {
+    await stub.close();
+  }
+});
+
+/* ---------------- 「本网站不接管」 ---------------- */
+
+/** 向 SW 发一条消息并等响应（等价于 popup 的 chrome.runtime.sendMessage）。 */
+function ask(chrome, msg) {
+  return new Promise((resolve) => { chrome.runtime.onMessage.__fire(msg, {}, resolve); });
+}
+
+test('本网站不接管：referrer 命中整站（含子域）时不转发、不取消', async () => {
+  const stub = await startStub();
+  const chrome = bootChrome(stub);
+  try {
+    await bootWorker(chrome);
+
+    // 用户在 www.example.com 的弹窗里点了「本网站不接管」
+    const saved = await ask(chrome, { type: 'set-site-bypass', url: 'https://www.example.com/store', bypassed: true });
+    assert.equal(saved.ok, true);
+    assert.equal(saved.site, 'example.com');
+    assert.equal(saved.bypassed, true);
+
+    // 页面换成子域，文件在 CDN：referrer 命中就整站放行
+    chrome.downloads.onCreated.__fire(makeDownloadItem({
+      id: 91,
+      url: fileUrl(stub, 'site.zip'),
+      referrer: 'https://support.example.com/download',
+    }));
+    await wait(500);
+    assert.equal(stub.downloads().length, 0, '整站放行的下载被转发了');
+    assert.equal(chrome.__callsOf('downloads.cancel').length, 0, '整站放行的浏览器下载被取消了');
+
+    // 同站点再下一次也一样
+    chrome.downloads.onCreated.__fire(makeDownloadItem({
+      id: 92,
+      url: fileUrl(stub, 'site2.zip'),
+      referrer: 'https://example.com/other',
+    }));
+    await wait(400);
+    assert.equal(stub.downloads().length, 0);
+    assert.equal(chrome.__callsOf('downloads.cancel').length, 0);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('本网站不接管：恢复后立刻重新接管', async () => {
+  const stub = await startStub();
+  const chrome = bootChrome(stub);
+  try {
+    await bootWorker(chrome);
+    await ask(chrome, { type: 'set-site-bypass', url: 'https://example.com/a', bypassed: true });
+    const off = await ask(chrome, { type: 'get-site-state', url: 'https://example.com/b' });
+    assert.equal(off.bypassed, true, '应该显示为已放行');
+
+    const restored = await ask(chrome, { type: 'set-site-bypass', url: 'https://example.com/a', bypassed: false });
+    assert.equal(restored.bypassed, false);
+
+    chrome.downloads.onCreated.__fire(makeDownloadItem({
+      id: 93,
+      url: fileUrl(stub, 'restored.zip'),
+      referrer: 'https://example.com/a',
+    }));
+    assert.equal(await waitFor(() => stub.downloads().length === 1), true, '恢复后没有重新接管');
+    assert.equal(await waitFor(() => chrome.__callsOf('downloads.cancel').length === 1), true);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('get-site-state 对无效页面返回空站点', async () => {
+  const stub = await startStub();
+  const chrome = bootChrome(stub);
+  try {
+    await bootWorker(chrome);
+    const r = await ask(chrome, { type: 'get-site-state', url: 'chrome://extensions' });
+    assert.equal(r.ok, true);
+    assert.equal(r.site, '');
+    assert.equal(r.bypassed, false);
+    const bad = await ask(chrome, { type: 'set-site-bypass', url: 'chrome://extensions', bypassed: true });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.code, 'no-site');
   } finally {
     await stub.close();
   }

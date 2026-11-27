@@ -20,54 +20,50 @@
     }
     .toggle.off { background: #262626; border-color: #3a3a3a; }
     .toggle .label { font-size: 13px; font-weight: 600; }
-    .toggle .sub { font-size: 11px; color: #9a9a9a; margin-top: 2px; }
     .toggle .track {
       flex: 0 0 auto; width: 40px; height: 22px; border-radius: 11px; background: #4cc27a; position: relative; transition: background .15s;
     }
     .toggle.off .track { background: #4a4a4a; }
     .toggle .knob {
       position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff;
+      /* 开：圆球在胶囊右侧；关：回到左侧 */
+      transform: translateX(18px);
       transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.4);
     }
-    .toggle.off .knob { transform: translateX(18px); }
-    .toggle .state { font-size: 11px; color: #8f8f8f; margin-top: 8px; }
-    label { display: block; font-size: 12px; color: #a8a8a8; margin-bottom: 4px; }
-    input {
-      width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 6px;
-      border: 1px solid #3a3a3a; background: #2b2b2b; color: #eee; font: inherit;
-    }
+    .toggle.off .knob { transform: translateX(0); }
     button {
       width: 100%; padding: 7px 10px; margin-top: 6px; border-radius: 6px; cursor: pointer;
       border: 1px solid #3a3a3a; background: #333; color: #eee; font: inherit;
     }
     button.primary { background: #2f6fd0; border-color: #2f6fd0; }
+    /* 站点放行是"危险动作"：橙色底色，明显区别于普通按钮 */
+    button.site {
+      padding: 11px 12px; font-size: 13px; font-weight: 600;
+      background: #d97706; border-color: #d97706; color: #fff;
+    }
+    button.site.bypassed { background: #3a2b18; border-color: #d97706; color: #ffc46b; }
     button:disabled { opacity: .5; cursor: default; }
-    .hint { font-size: 11px; color: #8f8f8f; margin-top: 6px; }
-    .status { font-size: 12px; color: #a8a8a8; }
     .link { font-size: 12px; color: #6ea8fe; cursor: pointer; text-decoration: none; }
   </style>
 </head>
 <body>
   <h1><span id="dot" class="dot"></span>海兔下载器</h1>
-  <div class="status" id="status">正在检测…</div>
 
   <div class="toggle" id="captureToggle" role="switch" aria-checked="true" tabindex="0">
-    <div>
-      <div class="label">自动接管浏览器下载</div>
-      <div class="sub">关掉后浏览器下载不再交给海兔</div>
-    </div>
+    <div class="label">自动接管浏览器下载</div>
     <div class="track"><div class="knob"></div></div>
   </div>
-  <div class="state" id="captureState">检测中…</div>
+
+  <div class="row">
+    <button id="siteBypass" class="site">本网站不接管下载</button>
+  </div>
 
   <div class="row">
     <button id="paste" class="primary">粘贴密钥并连接</button>
-    <div class="hint" id="pairHint">先在客户端「设置 → 浏览器扩展连接」复制密钥，再点这个按钮</div>
   </div>
 
   <div class="row">
     <button id="grant">授权访问网站（用于带上登录 Cookie）</button>
-    <div class="hint" id="grantHint"></div>
   </div>
 
   <div class="row">

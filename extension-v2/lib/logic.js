@@ -165,3 +165,48 @@ export function classifyRangeProbe(status) {
 export function probeNotice(verdict) {
   return verdict === 'no' ? '该链接不支持多线程分段，已交给浏览器下载' : '';
 }
+
+/**
+ * 站点键：小写主机名，去掉开头的 www.（www.apple.com 与 apple.com 视为同一站）。
+ * 非法地址返回空串，调用方据此禁用"本网站"按钮。
+ */
+export function siteKeyOf(url) {
+  if (typeof url !== 'string' || !url.trim()) return '';
+  let u;
+  try { u = new URL(url.trim()); } catch { return ''; }
+  // 只认能下载的协议：chrome://extensions 的主机名恰好是 "extensions"，不能当站点
+  if (!SUPPORTED_SCHEMES.includes(u.protocol)) return '';
+  const host = u.hostname.toLowerCase();
+  if (!host) return '';
+  return host.startsWith('www.') ? host.slice(4) : host;
+}
+
+/**
+ * host 是否属于 site。子域也算同一站：
+ * apple.com → www.apple.com / support.apple.com 全部命中。
+ * （site 必须是 siteKeyOf 归一化后的键，host 也应是归一化后的键。）
+ */
+export function hostBelongsToSite(host, site) {
+  const h = String(host || '').toLowerCase();
+  const s = String(site || '').toLowerCase();
+  if (!h || !s) return false;
+  if (h === s) return true;
+  return h.endsWith('.' + s);
+}
+
+/** 当前站点键是否在「本网站不接管」名单里。 */
+export function isSiteKeyBypassed(site, sites) {
+  if (!site) return false;
+  return Object.keys(sites || {}).some((s) => hostBelongsToSite(site, s));
+}
+
+/**
+ * 一次下载是否落在「本网站不接管」名单里。
+ * referrer（从哪个页面点的）与文件地址任一命中都算——下载常被重定向到 CDN，
+ * 只看文件地址会漏；只看 referrer 又会漏掉直接打开的直链。
+ */
+export function isDownloadSiteBypassed(item, sites) {
+  if (!item) return false;
+  return isSiteKeyBypassed(siteKeyOf(item.referrer), sites)
+    || isSiteKeyBypassed(siteKeyOf(item.url), sites);
+}

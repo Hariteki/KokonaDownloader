@@ -58,6 +58,16 @@ node tools/pack_extension.mjs --for-store
 > 一键开关与客户端「浏览器扩展自动拦截下载」是同一个值，从哪边改另一边都能同步到；
 > 工具栏图标徽章一眼可辨：绿=接管开着、琥珀 `II`=接管已关、灰 `OFF`=客户端未运行、红 `!`=密钥错。
 
+### 接管时序（避免浏览器先把文件下完）
+
+`downloads.onCreated` 触发时浏览器**已经开始下载**。扩展会立刻 `downloads.pause`
+（只停传输，条目和 Cookie/referrer 都保留），然后再做 Range 探测和转发：
+
+- 客户端接受 → `cancel` + `erase`，浏览器下载项消失
+- 客户端不可达 / 忙 / 不支持分段 / 被放行 → `resume`，浏览器原样续传，不需要重新发起下载
+
+这样大文件不会在"探测 + 请求客户端"的几百毫秒里被浏览器下完，也不会出现浏览器和客户端各下一份。
+
 ### 不支持多线程的链接
 
 接管前扩展会对目标地址发一个 `Range: bytes=0-1` 的探测请求（读到响应头就断开）：
@@ -74,6 +84,16 @@ node tools/pack_extension.mjs --for-store
 `downloads.onCreated` 会被放行——既不转发，也不取消。
 
 同一个链接之后再下一次，仍会按正常规则接管。
+
+### 弹窗里的站点放行按钮
+
+**橙色大按钮「本网站不接管下载 · 站点名」**：把当前标签页的站点（小写主机名、去掉 `www.`）
+写进 `storage.local` 的 `siteBypass` 名单，**整站所有页面（含子域）都不接管**。
+例如在 `apple.com` 上点一次，`www.apple.com`、`support.apple.com` 下的下载都直接留给浏览器。
+按钮会变成「恢复接管本网站」，再点一次即恢复。判定时 referrer 与文件地址任一命中都算，
+CDN 直链也不会漏。
+
+> 按钮不改动全局接管开关，也不会调用客户端；popup 不再显示小字说明，状态看圆点颜色。
 
 ### 强制附件（实验）
 
@@ -114,6 +134,9 @@ node tools/pack_extension.mjs --for-store
   Bearer token 无法捕获；这类站点只能靠 Cookie。
 - **强制附件按 URL 扩展名判断**，`?file=123` 这种不带扩展名的地址无效（DNR 不能按 Content-Type 条件）。
 - **接管前多一次探测请求**。只读响应头，正文不落盘；没有站点权限时探测直接失败并按"无法判断"处理。
+- **Edge 的下载气泡无法被扩展隐藏**。MV3 只能在下载开始后 `pause/cancel`，所以点击瞬间仍可能闪一下
+  下载气泡；`.exe/.msi` 被 Edge 判为可疑时，浏览器自己的「保留/删除」安全提示属于浏览器 UI，
+  扩展关不掉。此时客户端文件已下载完成，点「删除」只会清掉浏览器那份临时副本。
 - **服务器不给校验器、长度又恰好不变**时，客户端无法识别"文件被换过"，属协议层面无解。
 - 不做媒体嗅探（m3u8 / `<video>` 里的流）。那是独立项目，不是扩展改造。
 
@@ -124,7 +147,7 @@ node tools/pack_extension.mjs --for-store
 ```bash
 cd extension-v2
 
-# 纯逻辑 + SW 级联调（44 条，真实 HTTP 服务，不依赖浏览器）
+# 纯逻辑 + SW 级联调（53 条，真实 HTTP 服务，不依赖浏览器）
 node --test test/logic.test.mjs test/force-attachment.test.mjs test/sw.test.mjs
 ```
 
@@ -135,6 +158,7 @@ node --test test/logic.test.mjs test/force-attachment.test.mjs test/sw.test.mjs
 | `dnr_probe.mjs` | DNR `modifyHeaders` 在真实 Edge 里能否把 `.pdf` 变成下载（静态规则，最纯的机制验证） |
 | `dnr_ext_probe.mjs [--ext=<目录>]` | 真扩展：开关 → 规则进浏览器 → 产生下载 → 关掉后恢复 |
 | `ext_cookie_e2e.mjs [--client=real --secret=…]` | 登录态下载：403 → 带 Cookie → 200，含真客户端落盘比对 |
+| `ext_bypass_live.mjs` | 真扩展 + 真客户端：真实点击 popup 的橙色「本网站不接管/恢复接管」，断言浏览器真放行、客户端真接管 |
 | `pack_extension.mjs` | 打包，并校验 manifest 引用的文件都存在 |
 
 真浏览器脚本都用 `--headless=new`，并加 `--disable-extensions-except` 只加载被测扩展

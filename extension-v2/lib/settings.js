@@ -6,6 +6,7 @@ const KEY_SETTINGS = 'settings';
 const KEY_SESSION_START = 'sessionStartMs';
 const KEY_RECENT = 'recentForwards';
 const KEY_BYPASS = 'bypassOnce';
+const KEY_SITE_BYPASS = 'siteBypass';
 
 /** 一次性放行名单的有效期：浏览器重新发起下载通常在一两秒内，5 分钟足够宽松。 */
 const BYPASS_TTL_MS = 5 * 60 * 1000;
@@ -77,6 +78,23 @@ export async function consumeBypass(key) {
   delete map[key];
   await chrome.storage.session.set({ [KEY_BYPASS]: map });
   return Date.now() - at < BYPASS_TTL_MS;
+}
+
+/* ---------------- 「本网站不接管」名单（持久，storage.local） ---------------- */
+
+/** 站点键 → 加入时间。键由 logic.siteKeyOf 归一化（小写、去 www.）。 */
+export async function siteBypassList() {
+  const obj = await chrome.storage.local.get(KEY_SITE_BYPASS);
+  return (obj && obj[KEY_SITE_BYPASS]) || {};
+}
+
+export async function setSiteBypass(site, bypassed) {
+  if (!site) return {};
+  const map = await siteBypassList();
+  if (bypassed) map[site] = Date.now();
+  else delete map[site];
+  await chrome.storage.local.set({ [KEY_SITE_BYPASS]: map });
+  return map;
 }
 
 export function defaultsForUi() {
