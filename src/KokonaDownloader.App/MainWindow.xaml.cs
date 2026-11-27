@@ -661,6 +661,28 @@ public partial class MainWindow : Window, IDisposable
         ApplyView();
     }
 
+    /// <summary>
+    /// 删除/清空后立即把行从界面移除。引擎快照要等下一轮轮询（空闲期最长 2.5s），
+    /// 再叠加 900ms 的界面定时器——等它会让用户觉得"点了删除/清除没生效"。
+    /// </summary>
+    private void RemoveTasksFromUi(ICollection<string> gids)
+    {
+        if (gids.Count == 0) return;
+        var gone = new HashSet<string>(gids);
+        foreach (var gid in gone)
+        {
+            _taskMap.Remove(gid);
+            if (_progressWindows.TryGetValue(gid, out var win))
+            {
+                // 进度小窗一律藏回池子（复用，不销毁）
+                try { win.Park(); } catch { }
+            }
+        }
+        if (_snapshot != null)
+            _snapshot = _snapshot.Where(t => !gone.Contains(t.Gid)).ToList();
+        ApplyView();
+    }
+
     private void ApplyView()
     {
         // BT 概要条属于 BT 专用页：三趟 LINQ 扫描 + 拼串在隐藏页每 900ms 白做一次没有意义，
@@ -1035,12 +1057,19 @@ public partial class MainWindow : Window, IDisposable
             if (App.Host?.Engine == null || result != ContentDialogResult.Primary) return;
 
             int failed = 0;
+            var removedGids = new List<string>();
             foreach (var vm in list)
             {
-                try { await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile: false); }
-                catch (TaskNotFoundException) { /* 已经没了：同样算删掉 */ }
+                try
+                {
+                    await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile: false);
+                    removedGids.Add(vm.Gid);
+                }
+                catch (TaskNotFoundException) { removedGids.Add(vm.Gid); /* 已经没了：同样算删掉 */ }
                 catch (Exception ex) { failed++; App.Log($"[ui] 删除任务 {vm.Gid} 失败: {ex.Message}"); }
             }
+            // 成功的行立即从界面移除，不等下一轮快照
+            RemoveTasksFromUi(removedGids);
             // 全部成功才清选择；有失败则保留选中，便于用户重试
             if (failed == 0) ActiveList.SelectedItems.Clear();
             if (failed > 0) await ShowErrorAsync("部分任务未删除", $"{failed} 个任务删除失败，其余已移除。详情见日志。");
@@ -1132,11 +1161,17 @@ public partial class MainWindow : Window, IDisposable
             XamlRoot = RootGrid.XamlRoot
         });
         if (result != ContentDialogResult.Primary || App.Host?.Engine == null) return;
-        try { await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile: false); }
+        var removed = false;
+        try
+        {
+            await App.Host.Engine.RemoveAsync(vm.Gid, deleteFile: false);
+            removed = true;
+        }
         catch (TaskNotFoundException)
         {
             // 连点两次、或别处刚把这一行删掉：结果就是"没了"，不是失败，别再弹一次错
             App.Log($"[ui] 删除任务 {vm.Gid} 时它已经不存在（按成功处理）");
+            removed = true;
         }
         catch (Exception ex)
         {
@@ -1144,6 +1179,8 @@ public partial class MainWindow : Window, IDisposable
             App.Log($"[ui] 删除任务失败: {ex.Message}");
             await ShowErrorAsync("删除失败", ex.Message);
         }
+        // 成功（或本来就不存在）时立刻移除这一行，不等下一轮快照
+        if (removed) RemoveTasksFromUi(new[] { vm.Gid });
     }
 
     /// <summary>失败提示：以前这类错误只进日志，用户看到的是"点了没反应"。</summary>
@@ -1183,6 +1220,11 @@ public partial class MainWindow : Window, IDisposable
 
             int removed = await App.Host.Engine.ClearAllAsync();
             App.Log($"[ui] 已清除任务列表: {removed} 条");
+            // 立即清空界面：引擎快照要等下一轮轮询（空闲期最长 2.5s），不能让用户盯着旧列表
+            _snapshot = null;
+            _taskMap.Clear();
+            foreach (var win in _progressWindows.Values) { try { win.Park(); } catch { } }
+            ApplyView();
         }
         catch (Exception ex)
         {

@@ -66,6 +66,10 @@ public sealed class DownloadEngine : IAsyncDisposable
     private volatile List<DownloadTaskInfo> _latestSnapshot = new();
     /// <summary>快照发布时间（DateTime.Ticks，0 = 立即失效）。用 long + Volatile 保证跨线程读写原子。</summary>
     private long _latestSnapshotTicks;
+    /// <summary>本地任务集合的版本号：删除/清空等本地变更会 +1。
+    /// 轮询线程如果在变更**之前**读到了列表，这一轮就不再发布快照，
+    /// 否则会把刚删掉的任务重新推回界面（表现是"清除了又冒出来一下"）。</summary>
+    private int _snapshotGeneration;
     /// <summary>与任务快照同一轮发布的全球统计（GET /api/stats 直接复用它，省一次独立 RPC）。</summary>
     private volatile GlobalStat? _latestStats;
     /// <summary>本地历史（已完成 / 失败任务的终态快照，gid → 行）。
@@ -620,6 +624,9 @@ public sealed class DownloadEngine : IAsyncDisposable
             {
                 // 强类型 multicall（文档态）：整轮响应只解析一次，不建 JsonNode、不产生 LOH 字符串。
                 // 1000 任务时实测每轮分配 3,995 KB → 1,445 KB（详见测试报告 §12-B 表 1）。
+                // 本轮读取的版本号：期间若发生本地删除/清空，这一轮读到的列表已经过时，
+                // 不能再发布成快照（否则刚删掉的任务会被推回界面）
+                var genAtRead = Volatile.Read(ref _snapshotGeneration);
                 using var call = await _client.MultiCallBufferedAsync(new[]
                 {
                     ("aria2.tellActive", Array.Empty<object?>()),
@@ -785,9 +792,13 @@ public sealed class DownloadEngine : IAsyncDisposable
                 // 重启后这些行只能由客户端补回，否则 UI 与 GET /api/tasks 会一起"失忆"（P2-4）。
                 PruneStaleMetasOnce(tasks);
                 var published = WithHistory(tasks);   // tasks 已含 IDM 任务
-                _latestSnapshot = published;
-                _latestStats = stats;
-                Volatile.Write(ref _latestSnapshotTicks, DateTime.Now.Ticks);
+                var publishable = genAtRead == Volatile.Read(ref _snapshotGeneration);
+                if (publishable)
+                {
+                    _latestSnapshot = published;
+                    _latestStats = stats;
+                    Volatile.Write(ref _latestSnapshotTicks, DateTime.Now.Ticks);
+                }
 
                 // 状态字典清理：消失的任务（被删除/被清理）不该一直留在内存里
                 if (_lastStates.Count > tasks.Count)
@@ -797,7 +808,10 @@ public sealed class DownloadEngine : IAsyncDisposable
                         if (!alive.Contains(gid)) _lastStates.TryRemove(gid, out _);
                 }
 
-                EngineEvent?.Invoke(this, new EngineEventArgs { Type = "StatsUpdated", Stats = stats, Tasks = published });
+                if (publishable)
+                    EngineEvent?.Invoke(this, new EngineEventArgs { Type = "StatsUpdated", Stats = stats, Tasks = published });
+                else
+                    _log("本轮轮询期间发生了本地任务变更，丢弃这份过时快照（下一轮会重新发布）");
 
                 // 空转退避：没有任何进行中/排队任务时拉长轮询间隔（仍能及时看到新任务：新任务由 addUri 后立即置位）
                 idle = stats.NumActive == 0 && stats.NumWaiting == 0;
@@ -1531,15 +1545,16 @@ public sealed class DownloadEngine : IAsyncDisposable
         foreach (var h in _history.Keys) gids.Add(h);
         if (gids.Count == 0) return 0;
 
-        // 墓碑：aria2 会话文件每 10 秒落盘，异常退出后会把已清掉的任务复活
+        // 墓碑：aria2 会话文件每 10 秒落盘，异常退出后会把已清掉的任务复活。
+        // 批量登记（一次落盘）而不是每个任务 Mark 一次——后者在几百个任务时会同步写几百次文件。
         try
         {
+            var entries = new List<(IEnumerable<string> Urls, string? Dir)>();
             foreach (var t in tasks)
-                if (t.Urls.Count > 0)
-                    _tombstones.Mark(t.Urls.Where(u => !string.IsNullOrWhiteSpace(u)), t.Dir ?? _defaultDir);
+                if (t.Urls.Count > 0) entries.Add((t.Urls, t.Dir ?? _defaultDir));
             foreach (var m in metas)
-                if (m.Urls.Count > 0)
-                    _tombstones.Mark(m.Urls.Where(u => !string.IsNullOrWhiteSpace(u)), m.Dir ?? _defaultDir);
+                if (m.Urls.Count > 0) entries.Add((m.Urls, m.Dir ?? _defaultDir));
+            if (entries.Count > 0) _tombstones.MarkMany(entries);
         }
         catch (Exception ex) { _log($"清空任务列表时登记墓碑失败: {ex.Message}"); }
 
@@ -1552,10 +1567,17 @@ public sealed class DownloadEngine : IAsyncDisposable
         var ariaGids = gids.Where(g => !IdmTaskManager.IsIdmGid(g)).ToList();
         if (ariaGids.Count > 0)
         {
-            foreach (var gid in ariaGids)
+            // 只对还在活动/排队/暂停的任务发 remove；stopped 结果由 purgeDownloadResult 一次清掉。
+            // 原先对每个 gid 都 RemoveAsync 一次，已结束的任务每次都是一次注定失败的多余 RPC。
+            var liveAria = tasks
+                .Where(t => !IdmTaskManager.IsIdmGid(t.Gid)
+                            && t.State is TaskState.Active or TaskState.Waiting or TaskState.Paused)
+                .Select(t => t.Gid)
+                .ToList();
+            foreach (var gid in liveAria)
             {
                 try { await _client.RemoveAsync(gid, ct).ConfigureAwait(false); }
-                catch { /* 已经是 stopped 结果：交给下面的 purge */ }
+                catch { /* 已经在转移为 stopped 结果：交给下面的 purge */ }
             }
             try
             {
@@ -1572,6 +1594,8 @@ public sealed class DownloadEngine : IAsyncDisposable
             _lastStates.TryRemove(gid, out _);
         }
         InvalidateSnapshot();
+        // 立刻推一份空快照给 UI/托盘，不等下一轮轮询（空闲期最长 2.5s）
+        await PublishSnapshotNowAsync(ct).ConfigureAwait(false);
         _log($"[engine] 已清除任务列表：{gids.Count} 条（未删除文件）");
         return gids.Count;
     }
@@ -1729,7 +1753,33 @@ public sealed class DownloadEngine : IAsyncDisposable
     ///  - 暂停/继续/限速等改状态的指令之后：读接口现在优先复用快照（见 GetAllTasksAsync），
     ///    不作废就会让调用方拿到指令发出前的旧状态。
     /// </summary>
-    private void InvalidateSnapshot() => Volatile.Write(ref _latestSnapshotTicks, 0);
+    private void InvalidateSnapshot()
+    {
+        Interlocked.Increment(ref _snapshotGeneration);
+        Volatile.Write(ref _latestSnapshotTicks, 0);
+    }
+
+    /// <summary>
+    /// 本地删除/清空之后立即发布一次最新快照：空闲期轮询最长 2.5s 才跑一轮，
+    /// 等它会让"清除"看起来没生效（列表要等下一轮快照 + UI 定时器才消失）。
+    /// </summary>
+    private async Task PublishSnapshotNowAsync(CancellationToken ct)
+    {
+        try
+        {
+            var tasks = await GetAllTasksLiveAsync(ct).ConfigureAwait(false);
+            var stats = await GetGlobalStatAsync(ct).ConfigureAwait(false);
+            var published = WithHistory(tasks);
+            _latestSnapshot = published;
+            _latestStats = stats;
+            Volatile.Write(ref _latestSnapshotTicks, DateTime.Now.Ticks);
+            EngineEvent?.Invoke(this, new EngineEventArgs { Type = "StatsUpdated", Stats = stats, Tasks = published });
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            _log($"立即发布任务快照失败（下一轮轮询会补上）: {ex.Message}");
+        }
+    }
 
     public async Task SetGlobalSpeedLimitAsync(long bytesPerSec, CancellationToken ct = default)
     {

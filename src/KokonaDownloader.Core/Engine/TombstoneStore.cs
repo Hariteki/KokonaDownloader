@@ -43,18 +43,51 @@ public sealed class TombstoneStore
         lock (_lock)
         {
             var now = DateTime.Now;
+            var any = false;
             foreach (var u in urls)
             {
                 if (string.IsNullOrWhiteSpace(u)) continue;
                 _hashes[HashOf(u, dir)] = now;
+                any = true;
             }
-            if (_hashes.Count > MaxRecords)
-            {
-                _hashes = _hashes.OrderByDescending(kv => kv.Value).Take(MaxRecords)
-                    .ToDictionary(kv => kv.Key, kv => kv.Value);
-            }
+            if (!any) return;
+            TrimLocked();
         }
         Save();
+    }
+
+    /// <summary>
+    /// 批量登记墓碑：一次加锁、一次落盘。
+    /// 「清空任务列表」原先对每个任务调用一次 Mark，每条都要把整份墓碑文件重写一遍——
+    /// 几百个任务时光同步写盘就要几百毫秒，而且会占着调用线程（UI 调用时就是卡界面）。
+    /// </summary>
+    public void MarkMany(IEnumerable<(IEnumerable<string> Urls, string? Dir)> entries)
+    {
+        lock (_lock)
+        {
+            var now = DateTime.Now;
+            var any = false;
+            foreach (var (urls, dir) in entries)
+            {
+                foreach (var u in urls)
+                {
+                    if (string.IsNullOrWhiteSpace(u)) continue;
+                    _hashes[HashOf(u, dir)] = now;
+                    any = true;
+                }
+            }
+            if (!any) return;
+            TrimLocked();
+        }
+        Save();
+    }
+
+    /// <summary>超出上限时只保留最近的 N 条（必须在 _lock 内调用）。</summary>
+    private void TrimLocked()
+    {
+        if (_hashes.Count <= MaxRecords) return;
+        _hashes = _hashes.OrderByDescending(kv => kv.Value).Take(MaxRecords)
+            .ToDictionary(kv => kv.Key, kv => kv.Value);
     }
 
     /// <summary>同 URL+目录被再次添加时撤销墓碑。</summary>
